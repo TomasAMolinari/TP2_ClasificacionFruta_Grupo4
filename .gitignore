@@ -9,3 +9,9 @@ __pycache__/
 # Entornos virtuales
 .env/
 venv/
+
+# Datos del dataset
+/dataset/
+
+# Credenciales de Kaggle
+kaggle.json
