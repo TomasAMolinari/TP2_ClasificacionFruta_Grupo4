@@ -1,0 +1,11 @@
+# Ignorar datos y resultados pesados
+dataset/
+results/
+
+# Python compilados
+__pycache__/
+*.pyc
+
+# Entornos virtuales
+.env/
+venv/
