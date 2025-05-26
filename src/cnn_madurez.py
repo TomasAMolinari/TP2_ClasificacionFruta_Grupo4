@@ -9,6 +9,12 @@ from tensorflow.keras.preprocessing.image import ImageDataGenerator  # herramien
 from tensorflow.keras.callbacks import TensorBoard, EarlyStopping  # callbacks para visualización y detención temprana
 from tensorflow.keras.optimizers import Adam  # optimizador Adam para entrenar
 
+
+# ruta absoluta al directorio donde está el script
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# ruta absoluta al dataset
+DATASET_DIR = os.path.abspath(os.path.join(BASE_DIR, '..', 'dataset'))
+
 # 1) Definir los 5 niveles de maduración que serán las clases de salida
 MATURITY_LEVELS = [
     'verde',                  # nivel de madurez verde (no maduro)
@@ -20,7 +26,9 @@ MATURITY_LEVELS = [
 
 # 2) Función para crear generadores de entrenamiento y validación
 #    Asume estructura: dataset/train/<nivel>/*.jpg
-def crear_generadores(data_dir='dataset/train', img_size=(150,150), batch_size=32, val_split=0.2):
+def crear_generadores(data_dir=None, img_size=(150,150), batch_size=32, val_split=0.2):
+    if data_dir is None:
+        data_dir = os.path.join(DATASET_DIR, 'train')
     datagen = ImageDataGenerator(
         rescale=1./255,           # normalizar píxeles a rango [0,1]
         rotation_range=40,        # rotación aleatoria hasta 40 grados
@@ -73,7 +81,9 @@ def crear_modelo(input_shape=(150,150,3), n_classes=len(MATURITY_LEVELS)):
     return model  # devolver modelo compilado
 
 # 5) Función para inferir sobre los ejemplares en carpeta de test
-def inferir_test(test_dir='dataset/test', img_size=(150,150)):
+def inferir_test(test_dir=None, img_size=(150,150)):
+    if test_dir is None:
+        test_dir = os.path.join(DATASET_DIR, 'test')
     for fruta in os.listdir(test_dir):                              # iterar frutas en test
         fruta_dir = os.path.join(test_dir, fruta)                    # ruta a carpeta de fruta
         if not os.path.isdir(fruta_dir):                            # saltar si no es carpeta
@@ -98,7 +108,7 @@ def inferir_test(test_dir='dataset/test', img_size=(150,150)):
 # 6) Función principal: entrenar red y luego inferir en test
 def main():
     global train_gen, model  # declarar variables globales usadas en inferencia
-    train_gen, val_gen = crear_generadores('dataset/train')  # crear generadores
+    train_gen, val_gen = crear_generadores()  # usar ruta absoluta por defecto
     model = crear_modelo()                                    # construir y compilar modelo
     model.summary()                                           # mostrar arquitectura
     tb_cb = TensorBoard(log_dir='logs', histogram_freq=1)     # callback para TensorBoard
@@ -110,7 +120,7 @@ def main():
         callbacks=[tb_cb, es]                                 # callbacks configurados
     )
     print("\nInferencia en test:")
-    inferir_test('dataset/test')                              # ejecutar inferencia en test
+    inferir_test()                              # usar ruta absoluta por defecto
 
 if __name__ == '__main__':
     main()  # ejecutar main al iniciar script
