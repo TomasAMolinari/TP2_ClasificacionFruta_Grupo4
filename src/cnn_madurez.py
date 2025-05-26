@@ -108,7 +108,7 @@ def inferir_test(test_dir=None, img_size=(150,150)):
 # 6) Función principal: entrenar red y luego inferir en test
 def main():
     global train_gen, model  # declarar variables globales usadas en inferencia
-    train_gen, val_gen = crear_generadores()  # usar ruta absoluta por defecto
+    train_gen, val_gen = crear_generadores()  # crear generadores
     model = crear_modelo()                                    # construir y compilar modelo
     model.summary()                                           # mostrar arquitectura
     tb_cb = TensorBoard(log_dir='logs', histogram_freq=1)     # callback para TensorBoard
@@ -120,7 +120,7 @@ def main():
         callbacks=[tb_cb, es]                                 # callbacks configurados
     )
     print("\nInferencia en test:")
-    inferir_test()                              # usar ruta absoluta por defecto
+    inferir_test()                              # ejecutar inferencia en test
 
 if __name__ == '__main__':
     main()  # ejecutar main al iniciar script

@@ -1,7 +1,3 @@
-# Ignorar datos y resultados pesados
-dataset/
-results/
-
 # Python compilados
 __pycache__/
 *.pyc
@@ -9,9 +5,6 @@ __pycache__/
 # Entornos virtuales
 .env/
 venv/
-
-# Datos del dataset
-/dataset/
 
 # Credenciales de Kaggle
 kaggle.json
