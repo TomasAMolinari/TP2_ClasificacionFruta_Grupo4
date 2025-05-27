@@ -14,6 +14,8 @@ from tensorflow.keras.optimizers import Adam  # optimizador Adam para entrenar
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # ruta absoluta al dataset
 DATASET_DIR = os.path.abspath(os.path.join(BASE_DIR, '..', 'dataset'))
+# ruta absoluta a la carpeta de logs
+LOGS_DIR = os.path.abspath(os.path.join(BASE_DIR, '..', 'logs'))
 
 # 1) Definir los 5 niveles de maduración que serán las clases de salida
 MATURITY_LEVELS = [
@@ -111,7 +113,7 @@ def main():
     train_gen, val_gen = crear_generadores()  # crear generadores
     model = crear_modelo()                                    # construir y compilar modelo
     model.summary()                                           # mostrar arquitectura
-    tb_cb = TensorBoard(log_dir='logs', histogram_freq=1)     # callback para TensorBoard
+    tb_cb = TensorBoard(log_dir=LOGS_DIR, histogram_freq=1)     # callback para TensorBoard
     es = EarlyStopping(monitor='val_loss', patience=3, restore_best_weights=True)  # detener temprano
     model.fit(
         train_gen,                                            # datos de entrenamiento
