@@ -17,13 +17,12 @@ DATASET_DIR = os.path.abspath(os.path.join(BASE_DIR, '..', 'dataset'))
 # ruta absoluta a la carpeta de logs
 LOGS_DIR = os.path.abspath(os.path.join(BASE_DIR, '..', 'logs'))
 
-# 1) Definir los 5 niveles de maduración que serán las clases de salida
+# 1) Definir los 4 niveles de maduración que serán las clases de salida
 MATURITY_LEVELS = [
-    'verde',                  # nivel de madurez verde (no maduro)
-    'inicio_de_maduracion',   # nivel de inicio de maduración
-    'madurez_intermedia',     # nivel de madurez intermedia
-    'optimo',                 # nivel de madurez óptimo
-    'sobre-maduracion'        # nivel de sobre-maduración
+    'inmaduro',           # fruto verde (inmadura)
+    'maduro',          # fruto maduro
+    'sobre-maduro',    # fruto sobre-maduro
+    'descomposicion'          # fruto en descomposición
 ]
 
 # 2) Función para crear generadores de entrenamiento y validación
