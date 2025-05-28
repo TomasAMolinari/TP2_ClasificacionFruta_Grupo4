@@ -37,6 +37,7 @@ def crear_generadores(
     datagen = ImageDataGenerator(
         rescale=1./255,          # escala de píxeles a [0,1], acelerando aprendizaje
         rotation_range=40,       # rotaciones aleatorias hasta ±40°
+        zoom_range=[0.75,1,25],  # zoom aleatorio entre 75% y 125%
         width_shift_range=0.2,   # desplazamientos horizontales hasta 20%
         height_shift_range=0.2,  # desplazamientos verticales hasta 20%
         horizontal_flip=True,    # inversión horizontal aleatoria
@@ -144,7 +145,7 @@ def main():
     model.fit(
         train_gen,                                        # lote de entrenamiento
         validation_data=val_gen,                          # lote de validación
-        epochs=10,                                        # entrenamiento en 10 épocas
+        epochs=4,                                        # entrenamiento en varias épocas
         callbacks=[tb_cb, es]                             # registro y parada temprana
     )
 
