@@ -8,6 +8,3 @@ venv/
 
 # Credenciales de Kaggle
 kaggle.json
-
-
-logs/
