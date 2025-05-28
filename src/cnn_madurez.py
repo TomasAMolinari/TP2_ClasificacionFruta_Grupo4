@@ -11,55 +11,62 @@ from tensorflow.keras.callbacks import TensorBoard, EarlyStopping, ModelCheckpoi
 from tensorflow.keras.optimizers import Adam  # optimizador Adam para entrenar
 
 
-# ruta absoluta al directorio donde está el script
+# BASE_DIR: carpeta donde vive este script
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-# ruta absoluta al dataset
+# DATASET_DIR: ruta al directorio principal de datos
 DATASET_DIR = os.path.abspath(os.path.join(BASE_DIR, '..', 'dataset'))
-# ruta absoluta a la carpeta de logs
+# LOGS_DIR: destino de los logs para TensorBoard
 LOGS_DIR = os.path.abspath(os.path.join(BASE_DIR, '..', 'logs'))
 
-# 1) Definir los 4 niveles de maduración que serán las clases de salida
-MATURITY_LEVELS = [
-    'inmaduro',           # fruto verde (inmadura)
-    'maduro',          # fruto maduro
-    'sobre-maduro',    # fruto sobre-maduro
-    'descomposicion'          # fruto en descomposición
+# cuatro etiquetas de madurez usadas como clases de salida
+NIVEL_DE_MADUREZ = [
+    'inmaduro',
+    'maduro',
+    'sobre-maduro',
+    'descomposicion'
 ]
 
-# 2) Función para crear generadores de entrenamiento y validación
-#    Asume estructura: dataset/train/<nivel>/*.jpg
-def crear_generadores(data_dir=None, img_size=(150,150), batch_size=32, val_split=0.2):
-    if data_dir is None:
-        data_dir = os.path.join(DATASET_DIR, 'train')
+# generadores de entrenamiento y validación (estructura esperada: train/<clase>/*.jpg)
+def crear_generadores(
+    data_dir=os.path.join(DATASET_DIR, 'train'),
+    img_size=(150, 150),
+    batch_size=32,
+    val_split=0.2
+):
     datagen = ImageDataGenerator(
-        rescale=1./255,           # normalizar píxeles a rango [0,1]
-        rotation_range=40,        # rotación aleatoria hasta 40 grados
-        width_shift_range=0.2,    # desplazamiento horizontal aleatorio
-        height_shift_range=0.2,   # desplazamiento vertical aleatorio
-        horizontal_flip=True,     # volteo horizontal aleatorio
-        vertical_flip=True,       # volteo vertical aleatorio
-        validation_split=val_split # porcentaje de datos para validación
+        rescale=1./255,          # escala de píxeles a [0,1], acelerando aprendizaje
+        rotation_range=40,       # rotaciones aleatorias hasta ±40°
+        zoom_range=[0.75,1,25],  # zoom aleatorio entre 75% y 125%
+        width_shift_range=0.2,   # desplazamientos horizontales hasta 20%
+        height_shift_range=0.2,  # desplazamientos verticales hasta 20%
+        horizontal_flip=True,    # inversión horizontal aleatoria
+        vertical_flip=True,      # inversión vertical aleatoria
+        validation_split=val_split  # 20% de datos para validación
     )
-    train_gen = datagen.flow_from_directory(
-        data_dir,                 # carpeta raíz de entrenamiento
-        target_size=img_size,     # redimensionar imágenes
-        batch_size=batch_size,    # tamaño de batch
-        classes=MATURITY_LEVELS,  # orden y nombres de clases
-        class_mode='categorical', # clasificación multiclase one-hot
-        subset='training'         # partición de entrenamiento
-    )
-    val_gen = datagen.flow_from_directory(
-        data_dir,                 # misma carpeta para validación
-        target_size=img_size,     # redimensionamiento igual que entrenamiento
-        batch_size=batch_size,    # mismo tamaño de batch
-        classes=MATURITY_LEVELS,  # mismo orden de clases
-        class_mode='categorical', # misma modalidad
-        subset='validation'       # partición de validación
-    )
-    return train_gen, val_gen  # devolver generadores
 
-# 3) Bloque de convolución reutilizable: 2x Conv2D + MaxPooling2D
+    train_gen = datagen.flow_from_directory(
+        data_dir,                
+        target_size=img_size,    # fuerza a las imágenes en 100×100 px
+        batch_size=batch_size,   # lotes de 32 muestras
+        classes=NIVEL_DE_MADUREZ, # orden de etiquetas fijo
+        class_mode='categorical',# salida one-hot multiclase
+        subset='training'        # partición de entrenamiento
+    )
+
+    val_gen = datagen.flow_from_directory(
+        data_dir,                
+        target_size=img_size,    
+        batch_size=batch_size,   
+        classes=NIVEL_DE_MADUREZ, 
+        class_mode='categorical',
+        subset='validation'      # partición de validación
+    )
+
+    return train_gen, val_gen  # listas de generadores listas para fit()
+
+# bloque CNN reutilizable: dos convoluciones + pooling
 def conv_block(x, filters):
+
     x = Conv2D(filters, (3,3), activation='relu', padding='same')(x)  # primera convolución 3x3
     x = BatchNormalization()(x) # Añadir BatchNormalization
     x = Conv2D(filters, (3,3), activation='relu', padding='same')(x)  # segunda convolución 3x3
@@ -78,11 +85,13 @@ def crear_modelo(input_shape=(150,150,3), n_classes=len(MATURITY_LEVELS)):
     x = Dropout(0.5)(x)                        # aplicar dropout 50% para evitar overfitting
     out = Dense(n_classes, activation='softmax')(x)  # capa de salida con softmax para clasificar
     model = Model(inputs=inp, outputs=out)     # crear modelo funcional
+
     model.compile(
-        optimizer=Adam(1e-4),                 # optimizador Adam con lr=0.0001
-        loss='categorical_crossentropy',      # función de pérdida para multiclase
-        metrics=['accuracy']                  # métrica de evaluación: precisión
+        optimizer=Adam(1e-4),                             # Adam con lr=0.0001
+        loss='categorical_crossentropy',                  # entropía cruzada para multiclase
+        metrics=['accuracy']                              # precisión como métrica principal
     )
+
     return model  # devolver modelo compilado
 
 # 5) Función para inferir sobre los ejemplares en carpeta de test
@@ -161,8 +170,7 @@ def inferir_test(test_dir=None, img_size=(150,150)):
             
             resultados_por_fruta[fruta_tipo].append(current_res)
 
-    # Imprimir los resultados de forma organizada
-    print("\n--- Resultados de Inferencia en el Conjunto de Test ---")
+    # Imprimir los resultados de fo
     if not resultados_por_fruta:
         print("No se encontraron imágenes para procesar en el directorio de test.")
         return
@@ -226,6 +234,7 @@ def main():
         epochs=50,                                            # número de épocas (aumentado)
         callbacks=callbacks_list                              # callbacks configurados
     )
+
     print("\nInferencia en test:")
     # Cargar el mejor modelo guardado para la inferencia
     print("Cargando el mejor modelo guardado para inferencia...")
@@ -242,4 +251,4 @@ def main():
     inferir_test()                              # ejecutar inferencia en test
 
 if __name__ == '__main__':
-    main()  # ejecutar main al iniciar script
+    main()  
