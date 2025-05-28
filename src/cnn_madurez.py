@@ -3,6 +3,9 @@ import numpy as np  # importar NumPy para cálculos numéricos y manipulación d
 from PIL import Image  # importar Pillow para cargar y procesar imágenes
 import datetime # Para nombrar los directorios de logs
 
+# Verbosidad de TensorFlow (0 = todos, 1 = filtrar INFO, 2 = filtrar INFO y WARNING, 3 = filtrar INFO, WARNING, y ERROR)
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
 import tensorflow as tf  # importar TensorFlow, framework de deep learning
 from tensorflow.keras.models import Model  # API funcional de Keras para definir modelos
 from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, Flatten, Dense, Dropout, BatchNormalization  # capas de red neuronal CNN y dense
@@ -36,7 +39,7 @@ def crear_generadores(
     datagen = ImageDataGenerator(
         rescale=1./255,          # escala de píxeles a [0,1], acelerando aprendizaje
         rotation_range=40,       # rotaciones aleatorias hasta ±40°
-        zoom_range=[0.75,1,25],  # zoom aleatorio entre 75% y 125%
+        zoom_range=[0.75, 1.25],  # zoom aleatorio entre 75% y 125%
         width_shift_range=0.2,   # desplazamientos horizontales hasta 20%
         height_shift_range=0.2,  # desplazamientos verticales hasta 20%
         horizontal_flip=True,    # inversión horizontal aleatoria
@@ -74,7 +77,7 @@ def conv_block(x, filters):
     return MaxPooling2D((2,2))(x)  # reducir dimensiones espaciales a la mitad
 
 # 4) Función para crear y compilar el modelo CNN completo
-def crear_modelo(input_shape=(150,150,3), n_classes=len(MATURITY_LEVELS)):
+def crear_modelo(input_shape=(150,150,3), n_classes=len(NIVEL_DE_MADUREZ)):
     inp = Input(shape=input_shape)             # definir tensor de entrada
     x = conv_block(inp, 32)                    # bloque conv con 32 filtros
     x = conv_block(x, 64)                      # bloque conv con 64 filtros
@@ -125,8 +128,8 @@ def inferir_test(test_dir=None, img_size=(150,150)):
             
             # Extraer etiqueta real del nombre de la carpeta del ejemplar
             etiqueta_real = None
-            # Intentar encontrar una coincidencia con MATURITY_LEVELS (ordenados por longitud descendente para casos como 'sobre-maduro' vs 'maduro')
-            sorted_maturity_levels = sorted(MATURITY_LEVELS, key=len, reverse=True)
+            # Intentar encontrar una coincidencia con NIVEL_DE_MADUREZ (ordenados por longitud descendente para casos como 'sobre-maduro' vs 'maduro')
+            sorted_maturity_levels = sorted(NIVEL_DE_MADUREZ, key=len, reverse=True)
             for level in sorted_maturity_levels:
                 if ejemplar_nombre.endswith(f"_{level}"):
                     etiqueta_real = level
@@ -170,7 +173,7 @@ def inferir_test(test_dir=None, img_size=(150,150)):
             
             resultados_por_fruta[fruta_tipo].append(current_res)
 
-    # Imprimir los resultados de fo
+    # Imprimir los resultados de forma detallada
     if not resultados_por_fruta:
         print("No se encontraron imágenes para procesar en el directorio de test.")
         return
@@ -248,7 +251,7 @@ def main():
     else:
         print(f"Advertencia: No se encontró el archivo {best_model_filename} en {run_log_dir}. Usando el último modelo entrenado en memoria.")
 
-    inferir_test()                              # ejecutar inferencia en test
+    inferir_test() # ejecutar inferencia en test
 
 if __name__ == '__main__':
     main()  
