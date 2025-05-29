@@ -10,6 +10,7 @@ import time # Para medir la duración del entrenamiento
 # Verbosidad de TensorFlow (0 = todos, 1 = filtrar INFO, 2 = filtrar INFO y WARNING, 3 = filtrar INFO, WARNING, y ERROR)
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
+# --- CONFIGURACIÓN GLOBAL DE TENSORFLOW Y GPU ---
 import tensorflow as tf  # importar TensorFlow, framework de deep learning
 
 # Configurar memory growth para GPUs
@@ -44,7 +45,9 @@ train_gen = None # Necesario globalmente para inferir_test
 model = None # Necesario globalmente para inferir_test
 
 
-# cuatro etiquetas de madurez usadas como clases de salida
+# --- DEFINICIONES GLOBALES DE RUTAS Y CONSTANTES ---
+
+# NIVEL_DE_MADUREZ
 NIVEL_DE_MADUREZ = [
     'inmaduro',
     'maduro',
@@ -52,6 +55,7 @@ NIVEL_DE_MADUREZ = [
     'descomposicion'
 ]
 
+# --- FUNCIÓN PARA CREAR GENERADORES DE DATOS ---
 # generadores de entrenamiento y validación (estructura esperada: train/<clase>/*.jpg)
 def crear_generadores(
     data_dir_param=None, # Se resolverá a DATASET_DIR / 'train' si es None
@@ -103,6 +107,7 @@ def crear_generadores(
         return None, None
 
 
+# --- DEFINICIÓN DEL MODELO CNN ---
 # bloque CNN reutilizable: dos convoluciones + pooling
 def conv_block(x, filters):
 
@@ -133,6 +138,7 @@ def crear_modelo(input_shape=(150,150,3), n_classes=len(NIVEL_DE_MADUREZ)):
 
     return model_cnn  # devolver modelo compilado
 
+# --- FUNCIÓN DE INFERENCIA EN EL CONJUNTO DE TEST ---
 # 5) Función para inferir sobre los ejemplares en carpeta de test
 def inferir_test(test_dir_param=None, img_size=(150,150), fruit_type_arg="N/A"):
     actual_test_dir = test_dir_param if test_dir_param else DATASET_DIR / 'test'
@@ -278,6 +284,7 @@ def inferir_test(test_dir_param=None, img_size=(150,150), fruit_type_arg="N/A"):
     print("=== Fin de la inferencia ===")
     # Ya no se necesitan los recordatorios de estructura aquí, se asume que el warning inicial es suficiente.
 
+# --- FUNCIÓN PRINCIPAL (MAIN) ---
 # 6) Función principal: entrenar red y luego inferir en test
 def main():
     global DATASET_DIR, LOGS_DIR, train_gen, model  # declarar variables globales usadas en inferencia
@@ -288,7 +295,7 @@ def main():
     parser.add_argument('--use_best_model', action='store_true',
                         help='Si se especifica, intenta cargar el mejor modelo guardado previamente para la fruta. Si no, reentrena por defecto.')
     args = parser.parse_args()
-    
+    # === CONFIGURACIÓN INICIAL BASADA EN ARGUMENTOS ===
     fruit_type_arg = args.fruit_type
     print_color(f"Procesando para el tipo de fruta: {fruit_type_arg}", color="magenta")
 
@@ -309,6 +316,7 @@ def main():
         print_color(f"No se pudieron crear los generadores de datos para {fruit_type_arg}. Abortando.", color="rojo")
         return
 
+    # === CREACIÓN O CARGA DEL MODELO ===
     model = crear_modelo()                                    # construir y compilar modelo
     model.summary()                                           # mostrar arquitectura
     
@@ -341,6 +349,7 @@ def main():
         if not args.use_best_model: # Si no se pidió usar el mejor modelo, o si falló la carga
              print_color(f"Entrenando nuevo modelo para '{fruit_type_arg}'...", color="magenta")
         
+        # === BLOQUE DE ENTRENAMIENTO DEL MODELO ===
         # Calcular class weights
         classes = np.array(train_gen.classes) 
         
@@ -447,9 +456,11 @@ def main():
         # --- FIN DE LOGEO DE ENTRENAMIENTO FORMATEADO ---
 
     # siempre inferir después
+    # === INICIO DE INFERENCIA EN CONJUNTO DE TEST ===
     print_color(f"\nInferencia en test para '{fruit_type_arg}':", color="cyan")
     inferir_test(fruit_type_arg=fruit_type_arg) # Pasar fruit_type_arg
 
+# --- FUNCIÓN UTILITARIA PARA IMPRESIÓN EN COLOR ---
 # Helper para imprimir con colores (sin cambios, pero asegurar que funcione en Git Bash)
 def print_color(text, color="default"):
     # \x1b es el carácter ESCAPE
@@ -468,5 +479,6 @@ def print_color(text, color="default"):
     start_color = colors.get(color.lower(), colors["default"]) # Usar default si el color no existe
     print(start_color + text + end_color)
 
+# --- PUNTO DE ENTRADA DEL SCRIPT ---
 if __name__ == '__main__':
     main()  
