@@ -2,6 +2,11 @@ import os  # importar módulo para manejo de sistema de archivos (rutas, listas 
 import numpy as np  # importar NumPy para cálculos numéricos y manipulación de arrays
 from PIL import Image  # importar Pillow para cargar y procesar imágenes
 import datetime # Para nombrar los directorios de logs
+import argparse # Para manejar argumentos de línea de comandos
+from sklearn.utils import class_weight # Para calcular pesos de clase
+
+# Verbosidad de TensorFlow (0 = todos, 1 = filtrar INFO, 2 = filtrar INFO y WARNING, 3 = filtrar INFO, WARNING, y ERROR)
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 import tensorflow as tf  # importar TensorFlow, framework de deep learning
 from tensorflow.keras.models import Model  # API funcional de Keras para definir modelos
@@ -29,16 +34,16 @@ NIVEL_DE_MADUREZ = [
 # generadores de entrenamiento y validación (estructura esperada: train/<clase>/*.jpg)
 def crear_generadores(
     data_dir=os.path.join(DATASET_DIR, 'train'),
-    img_size=(300, 300),
+    img_size=(150, 150),
     batch_size=16,
     val_split=0.2
 ):
     datagen = ImageDataGenerator(
         rescale=1./255,          # escala de píxeles a [0,1], acelerando aprendizaje
-        rotation_range=60,       # rotaciones aleatorias hasta ±40°
-        zoom_range=[0.15,1.85],  # zoom aleatorio entre 75% y 125%
-        width_shift_range=0.5,   # desplazamientos horizontales hasta 20%
-        height_shift_range=0.5,  # desplazamientos verticales hasta 20%
+        rotation_range=30,       # rotaciones aleatorias hasta ±30° (reducido de 60)
+        zoom_range=[0.8, 1.2],   # zoom aleatorio entre 80% y 120% (reducido de [0.15,1.85])
+        width_shift_range=0.15,  # desplazamientos horizontales hasta 15% (reducido de 0.5)
+        height_shift_range=0.15, # desplazamientos verticales hasta 15% (reducido de 0.5)
         horizontal_flip=True,    # inversión horizontal aleatoria
         validation_split=val_split  # 20% de datos para validación
     )
@@ -66,22 +71,22 @@ def crear_generadores(
 # bloque CNN reutilizable: dos convoluciones + pooling
 def conv_block(x, filters):
 
-    x = Conv2D(filters, (3,3), activation='relu', padding='same')(x)  # primera convolución 3x3
+    x = Conv2D(filters, (3,3), activation='relu', padding='same', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)  # primera convolución 3x3
     x = BatchNormalization()(x) # Añadir BatchNormalization
-    x = Conv2D(filters, (3,3), activation='relu', padding='same')(x)  # segunda convolución 3x3
+    x = Conv2D(filters, (3,3), activation='relu', padding='same', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)  # segunda convolución 3x3
     x = BatchNormalization()(x) # Añadir BatchNormalization
     return MaxPooling2D((2,2))(x)  # reducir dimensiones espaciales a la mitad
 
 # 4) Función para crear y compilar el modelo CNN completo
-def crear_modelo(input_shape=(300,300,3), n_classes=len(NIVEL_DE_MADUREZ)):
+def crear_modelo(input_shape=(150,150,3), n_classes=len(NIVEL_DE_MADUREZ)):
     inp = Input(shape=input_shape)             # definir tensor de entrada
     x = conv_block(inp, 128)  
     x = conv_block(x, 64)                      
     x = conv_block(x, 32)                      
     x = Flatten()(x)                           # aplanar salida para capa densa
-    x = Dense(128, activation='relu')(x)       # capa densa intermedia con activación ReLU
+    x = Dense(128, activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)       # capa densa intermedia con activación ReLU
     x = BatchNormalization()(x)                # añadir BatchNormalization
-    x = Dropout(0.2)(x)                        # aplicar dropout 50% para evitar overfitting
+    x = Dropout(0.4)(x)                        # aplicar dropout 40% para evitar overfitting (aumentado de 0.2)
     out = Dense(n_classes, activation='softmax')(x)  # capa de salida con softmax para clasificar
     model = Model(inputs=inp, outputs=out)     # crear modelo funcional
 
@@ -94,7 +99,7 @@ def crear_modelo(input_shape=(300,300,3), n_classes=len(NIVEL_DE_MADUREZ)):
     return model  # devolver modelo compilado
 
 # 5) Función para inferir sobre los ejemplares en carpeta de test
-def inferir_test(test_dir=None, img_size=(300,300)):
+def inferir_test(test_dir=None, img_size=(150,150)):
     if test_dir is None:
         test_dir = os.path.join(DATASET_DIR, 'test')
 
@@ -197,32 +202,67 @@ def inferir_test(test_dir=None, img_size=(300,300)):
 # 6) Función principal: entrenar red y luego inferir en test
 def main():
     global train_gen, model  # declarar variables globales usadas en inferencia
+
+    parser = argparse.ArgumentParser(description='Entrenar y evaluar una CNN para clasificación de madurez de frutas.')
+    parser.add_argument('--use_best_model', action='store_true',
+                        help='Si se especifica, intenta cargar el mejor modelo guardado previamente. Si no, reentrena por defecto.')
+    args = parser.parse_args()
+
     train_gen, val_gen = crear_generadores()  # crear generadores
     model = crear_modelo()                                    # construir y compilar modelo
     model.summary()                                           # mostrar arquitectura
     
-    # Verifico que no se haya entrenado antes
-    BEST_MODEL_PATH = None  
-    all_runs = sorted(os.listdir(LOGS_DIR))
-    for run in reversed(all_runs):
-        candidate = os.path.join(LOGS_DIR, run, 'best_model.keras')
-        if os.path.exists(candidate):
-            BEST_MODEL_PATH = candidate
-            break
- 
-    # ← Este IF tiene que ir aquí, antes de los callbacks y fit
-    if BEST_MODEL_PATH:
-        model = tf.keras.models.load_model(BEST_MODEL_PATH)
-        print("\033[32m" + "Modelo ya entrenado encontrado. Cargando y saltando entrenamiento." + "\033[0m") #printea este log de color distintivo
-    else:
-        print("\033[35m" + "No se encontró un modelo entrenado, entrenando..." + "\033[0m") #printea este log de color distintivo
+    BEST_MODEL_PATH = None
+    load_model_attempted = False
+
+    if args.use_best_model:
+        print_color("Intentando cargar el mejor modelo pre-entrenado...", color="amarillo")
+        all_runs = sorted(os.listdir(LOGS_DIR)) if os.path.exists(LOGS_DIR) else []
+        for run in reversed(all_runs):
+            candidate = os.path.join(LOGS_DIR, run, 'best_model.keras')
+            if os.path.exists(candidate):
+                BEST_MODEL_PATH = candidate
+                break
+        
+        if BEST_MODEL_PATH:
+            try:
+                model = tf.keras.models.load_model(BEST_MODEL_PATH)
+                print_color(f"Modelo pre-entrenado cargado desde: {BEST_MODEL_PATH}. Saltando entrenamiento.", color="verde")
+                load_model_attempted = True
+            except Exception as e:
+                print_color(f"Error al cargar el modelo desde {BEST_MODEL_PATH}: {e}. Se procederá a entrenar.", color="rojo")
+                BEST_MODEL_PATH = None # Asegurar que no se intente usar un modelo corrupto
+        else:
+            print_color("No se encontró un modelo pre-entrenado. Se procederá a entrenar.", color="amarillo")
+    
+    if not load_model_attempted or not BEST_MODEL_PATH:
+        if not args.use_best_model:
+             print_color("No se especificó --use_best_model o no se encontró/pudo cargar. Entrenando nuevo modelo...", color="magenta")
+        
+        # Calcular class weights
+        classes = np.array(train_gen.classes) # Obtener todas las etiquetas de clase del generador
+        # Asegurarse de que las etiquetas sean numéricas para compute_class_weight
+        # train_gen.classes devuelve los índices de clase para cada muestra, que es lo que necesitamos
+        
+        class_weights_calculated = class_weight.compute_class_weight(
+            'balanced',
+            classes=np.unique(classes), # Clases únicas presentes en los datos
+            y=classes                   # Todas las etiquetas de clase
+        )
+        # Crear el diccionario de class_weight para model.fit
+        # train_gen.class_indices mapea nombres de clase a índices: {'descomposicion': 0, 'inmaduro': 1, ...}
+        # Necesitamos mapear los pesos calculados (que están en el orden de np.unique(classes)) a los índices correctos
+        class_weights_dict = dict(enumerate(class_weights_calculated))
+        
+        print_color(f"Pesos de clase calculados: {class_weights_dict}", color="cyan")
+
         current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         run_log_dir  = os.path.join(LOGS_DIR, current_time)
         os.makedirs(run_log_dir, exist_ok=True)
 
         # callbacks solo si vamos a entrenar
         tb_cb = TensorBoard(log_dir=run_log_dir, histogram_freq=1)
-        es_cb = EarlyStopping(monitor='val_loss', patience=3, restore_best_weights=True, verbose=1)
+        es_cb = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True, verbose=1)
         mc_cb = ModelCheckpoint(filepath=os.path.join(run_log_dir, 'best_model.keras'), monitor='val_loss', save_best_only=True, verbose=1)
         lr_cb = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=3, min_lr=1e-6, verbose=1)
         callbacks_list = [tb_cb, es_cb, mc_cb, lr_cb]
@@ -230,27 +270,33 @@ def main():
         model.fit(
             train_gen,
             validation_data=val_gen,
-            epochs=2,
-            callbacks=callbacks_list
+            epochs=10, # Ajustar epochs según sea necesario
+            callbacks=callbacks_list,
+            class_weight=class_weights_dict # Aplicar pesos de clase
         )
+        # Guardar explícitamente el modelo después del entrenamiento si no se usó ModelCheckpoint para el mejor modelo
+        # o si se quiere guardar el modelo final independientemente.
+        # model.save(os.path.join(run_log_dir, 'final_model.keras')) 
+        print_color("Entrenamiento completado.", color="verde")
 
     # siempre inferir después
-    print("\nInferencia en test:")
-    inferir_test()
-  #  print("\nInferencia en test:")
-    # Cargar el mejor modelo guardado para la inferencia
-   # print("Cargando el mejor modelo guardado para inferencia...")
-    # La ruta al mejor modelo ahora incluye el subdirectorio de la ejecución
-    # Para encontrar el último modelo entrenado, necesitaríamos una lógica más compleja
-    # o asumir que el usuario especifica qué modelo cargar.
-    # Por ahora, vamos a cargar desde la ruta donde se guardó en esta ejecución.
- #   BEST_MODEL_PATH = os.path.join(run_log_dir, best_model_filename)
- #   if os.path.exists(BEST_MODEL_PATH):
-  #      model = tf.keras.models.load_model(BEST_MODEL_PATH)
-  #  else:
-  #      print(f"Advertencia: No se encontró el archivo {best_model_filename} en {run_log_dir}. Usando el último modelo entrenado en memoria.")
-#
-  #  inferir_test()                              
+    print_color("Inferencia en test:", color="cyan")
+    inferir_test()                            
+
+# Helper para imprimir con colores
+def print_color(text, color="default"):
+    colors = {
+        "default": "[0m",
+        "rojo": "[31m",
+        "verde": "[32m",
+        "amarillo": "[33m",
+        "azul": "[34m",
+        "magenta": "[35m",
+        "cyan": "[36m",
+    }
+    end_color = colors["default"]
+    start_color = colors.get(color.lower(), end_color)
+    print(start_color + text + end_color)
 
 if __name__ == '__main__':
     main()  
