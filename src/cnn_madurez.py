@@ -4,11 +4,26 @@ from PIL import Image  # importar Pillow para cargar y procesar imágenes
 import datetime # Para nombrar los directorios de logs
 import argparse # Para manejar argumentos de línea de comandos
 from sklearn.utils import class_weight # Para calcular pesos de clase
+from pathlib import Path # Para manejo de rutas de forma robusta y multiplataforma
+import time # Para medir la duración del entrenamiento
 
 # Verbosidad de TensorFlow (0 = todos, 1 = filtrar INFO, 2 = filtrar INFO y WARNING, 3 = filtrar INFO, WARNING, y ERROR)
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 import tensorflow as tf  # importar TensorFlow, framework de deep learning
+
+# Configurar memory growth para GPUs
+gpus = tf.config.experimental.list_physical_devices('GPU')
+if gpus:
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        logical_gpus = tf.config.experimental.list_logical_devices('GPU')
+        print(len(gpus), "Physical GPUs,", len(logical_gpus), "Logical GPUs configured for memory growth.")
+    except RuntimeError as e:
+        # Memory growth must be set before GPUs have been initialized
+        print(f"Error setting memory growth: {e}")
+
 from tensorflow.keras.models import Model  # API funcional de Keras para definir modelos
 from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, Flatten, Dense, Dropout, BatchNormalization  # capas de red neuronal CNN y dense
 from tensorflow.keras.preprocessing.image import ImageDataGenerator  # herramienta para augmentación y preprocesamiento de imágenes
@@ -16,12 +31,18 @@ from tensorflow.keras.callbacks import TensorBoard, EarlyStopping, ModelCheckpoi
 from tensorflow.keras.optimizers import Adam  # optimizador Adam para entrenar
 
 
-# BASE_DIR: carpeta donde vive este script
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-# DATASET_DIR: ruta al directorio principal de datos
-DATASET_DIR = os.path.abspath(os.path.join(BASE_DIR, '..', 'dataset'))
-# LOGS_DIR: destino de los logs para TensorBoard
-LOGS_DIR = os.path.abspath(os.path.join(BASE_DIR, '..', 'logs'))
+# PROJECT_ROOT: carpeta donde vive este script
+PROJECT_ROOT = Path(__file__).resolve().parent
+# Rutas raíz por defecto, las rutas específicas por fruta se derivarán en main()
+DATASET_ROOT_DEFAULT = (PROJECT_ROOT / ".." / "dataset").resolve()
+LOGS_ROOT_DEFAULT = (PROJECT_ROOT / ".." / "logs").resolve()
+
+# Variables globales que se establecerán en main() según el tipo de fruta
+DATASET_DIR: Path = None
+LOGS_DIR: Path = None
+train_gen = None # Necesario globalmente para inferir_test
+model = None # Necesario globalmente para inferir_test
+
 
 # cuatro etiquetas de madurez usadas como clases de salida
 NIVEL_DE_MADUREZ = [
@@ -33,11 +54,17 @@ NIVEL_DE_MADUREZ = [
 
 # generadores de entrenamiento y validación (estructura esperada: train/<clase>/*.jpg)
 def crear_generadores(
-    data_dir=os.path.join(DATASET_DIR, 'train'),
+    data_dir_param=None, # Se resolverá a DATASET_DIR / 'train' si es None
     img_size=(150, 150),
     batch_size=16,
     val_split=0.2
 ):
+    actual_data_dir = data_dir_param if data_dir_param else DATASET_DIR / 'train'
+    if not actual_data_dir.exists():
+        print_color(f"Directorio de datos de entrenamiento no encontrado: {actual_data_dir}", color="rojo")
+        print_color("Asegúrate de que la estructura es: dataset/<tipo_fruta>/train/<clase>/imagenes...", color="amarillo")
+        return None, None # Devuelve None si el directorio no existe
+
     datagen = ImageDataGenerator(
         rescale=1./255,          # escala de píxeles a [0,1], acelerando aprendizaje
         rotation_range=30,       # rotaciones aleatorias hasta ±30° (reducido de 60)
@@ -48,25 +75,33 @@ def crear_generadores(
         validation_split=val_split  # 20% de datos para validación
     )
 
-    train_gen = datagen.flow_from_directory(
-        data_dir,                
-        target_size=img_size,    # fuerza a las imágenes en 100×100 px
-        batch_size=batch_size,   # lotes de 16 muestras
-        classes=NIVEL_DE_MADUREZ, # orden de etiquetas fijo
-        class_mode='categorical',# salida one-hot multiclase
-        subset='training'        # partición de entrenamiento
-    )
+    try:
+        train_generator = datagen.flow_from_directory(
+            actual_data_dir,
+            target_size=img_size,    # fuerza a las imágenes en 100×100 px
+            batch_size=batch_size,   # lotes de 16 muestras
+            classes=NIVEL_DE_MADUREZ, # orden de etiquetas fijo
+            class_mode='categorical',# salida one-hot multiclase
+            subset='training'        # partición de entrenamiento
+        )
 
-    val_gen = datagen.flow_from_directory(
-        data_dir,                
-        target_size=img_size,    
-        batch_size=batch_size,   
-        classes=NIVEL_DE_MADUREZ, 
-        class_mode='categorical',
-        subset='validation'      # partición de validación
-    )
+        val_generator = datagen.flow_from_directory(
+            actual_data_dir,
+            target_size=img_size,
+            batch_size=batch_size,
+            classes=NIVEL_DE_MADUREZ,
+            class_mode='categorical',
+            subset='validation'      # partición de validación
+        )
+        return train_generator, val_generator # listas de generadores listas para fit()
+    except FileNotFoundError:
+        print_color(f"Error: No se pudo encontrar el directorio {actual_data_dir} o está vacío.", color="rojo")
+        print_color("Verifica la ruta y que contenga subdirectorios de clase.", color="amarillo")
+        return None, None
+    except Exception as e:
+        print_color(f"Ocurrió un error inesperado al crear generadores: {e}", color="rojo")
+        return None, None
 
-    return train_gen, val_gen  # listas de generadores listas para fit()
 
 # bloque CNN reutilizable: dos convoluciones + pooling
 def conv_block(x, filters):
@@ -80,135 +115,200 @@ def conv_block(x, filters):
 # 4) Función para crear y compilar el modelo CNN completo
 def crear_modelo(input_shape=(150,150,3), n_classes=len(NIVEL_DE_MADUREZ)):
     inp = Input(shape=input_shape)             # definir tensor de entrada
-    x = conv_block(inp, 128)  
-    x = conv_block(x, 64)                      
-    x = conv_block(x, 32)                      
+    x = conv_block(inp, 128)
+    x = conv_block(x, 64)
+    x = conv_block(x, 32)
     x = Flatten()(x)                           # aplanar salida para capa densa
     x = Dense(128, activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)       # capa densa intermedia con activación ReLU
     x = BatchNormalization()(x)                # añadir BatchNormalization
     x = Dropout(0.4)(x)                        # aplicar dropout 40% para evitar overfitting (aumentado de 0.2)
     out = Dense(n_classes, activation='softmax')(x)  # capa de salida con softmax para clasificar
-    model = Model(inputs=inp, outputs=out)     # crear modelo funcional
+    model_cnn = Model(inputs=inp, outputs=out)     # crear modelo funcional
 
-    model.compile(
+    model_cnn.compile(
         optimizer=Adam(1e-4),                             # Adam con lr=0.0001
         loss='categorical_crossentropy',                  # entropía cruzada para multiclase
         metrics=['accuracy']                              # precisión como métrica principal
     )
 
-    return model  # devolver modelo compilado
+    return model_cnn  # devolver modelo compilado
 
 # 5) Función para inferir sobre los ejemplares en carpeta de test
-def inferir_test(test_dir=None, img_size=(150,150)):
-    if test_dir is None:
-        test_dir = os.path.join(DATASET_DIR, 'test')
+def inferir_test(test_dir_param=None, img_size=(150,150), fruit_type_arg="N/A"):
+    actual_test_dir = test_dir_param if test_dir_param else DATASET_DIR / 'test'
+    if not actual_test_dir.is_dir():
+        print_color(f"[ERROR] Directorio de test no encontrado para {fruit_type_arg}: {actual_test_dir}", color="rojo")
+        print_color(f"        Asegúrate de que la estructura es: {DATASET_DIR / 'test'}/<CLASE_REAL>/<IMAGEN_EJEMPLAR.jpg>", color="amarillo")
+        return
 
-    # asegurarse de que train_gen esté disponible para obtener class_indices
     if 'train_gen' not in globals() or train_gen is None:
-        print("Error: train_gen no está definido globalmente o no se ha inicializado. "
-              "No se pueden obtener las etiquetas de clase para la inferencia.")
+        print_color("[ERROR] train_gen no definido. No se pueden obtener etiquetas para inferencia.", color="rojo")
         return
     
-    label_map = {v: k for k, v in train_gen.class_indices.items()}  # índice->etiqueta desde generador
+    global model
+    if model is None:
+        print_color("[ERROR] Modelo no cargado o entrenado. No se puede inferir.", color="rojo")
+        return
 
-    resultados_por_fruta = {}
-    total_evaluadas = 0
-    correctas_global = 0
-
-    for fruta_tipo in os.listdir(test_dir):                              # iterar tipos de frutas en test (ej: bananas, tomates)
-        fruta_tipo_dir = os.path.join(test_dir, fruta_tipo)                # ruta a carpeta de tipo de fruta
-        if not os.path.isdir(fruta_tipo_dir):                            # saltar si no es carpeta
+    label_map = {v: k for k, v in train_gen.class_indices.items()}
+    stats_por_clase_real = {level: {'total': 0, 'correctas': 0, 'predicciones': {k: 0 for k in NIVEL_DE_MADUREZ}} for level in NIVEL_DE_MADUREZ}
+    stats_por_clase_real['Desconocida'] = {'total': 0, 'correctas': 0, 'predicciones': {k: 0 for k in NIVEL_DE_MADUREZ}}
+    
+    unrecognized_dirs_warnings = {} # Para warnings de directorios no mapeados
+    errores_procesamiento_general = 0
+    total_imagenes_clases_conocidas = 0
+    correctas_global_clases_conocidas = 0
+    
+    for clase_dir in actual_test_dir.iterdir():
+        if not clase_dir.is_dir():
             continue
         
-        resultados_por_fruta[fruta_tipo] = []
+        etiqueta_real_clase_original = clase_dir.name
+        clase_para_stats = 'Desconocida'
 
-        for ejemplar_nombre in os.listdir(fruta_tipo_dir):                   # iterar ejemplares de esa fruta
-            ejemplar_dir = os.path.join(fruta_tipo_dir, ejemplar_nombre)     # ruta a carpeta de ejemplar
-            if not os.path.isdir(ejemplar_dir):                              # saltar si no es carpeta
+        if etiqueta_real_clase_original in NIVEL_DE_MADUREZ:
+            clase_para_stats = etiqueta_real_clase_original
+        else:
+            if etiqueta_real_clase_original not in unrecognized_dirs_warnings:
+                unrecognized_dirs_warnings[etiqueta_real_clase_original] = 0
+        
+        imagenes_en_esta_clase_dir = 0
+        for img_file_path in clase_dir.iterdir():
+            if not (img_file_path.is_file() and img_file_path.suffix.lower() in ('.png','.jpg','.jpeg')):
                 continue
             
-            # Extraer etiqueta real del nombre de la carpeta del ejemplar
-            etiqueta_real = None
-            # Intentar encontrar una coincidencia con NIVEL_DE_MADUREZ (ordenados por longitud descendente para casos como 'sobre-maduro' vs 'maduro')
-            sorted_maturity_levels = sorted(NIVEL_DE_MADUREZ, key=len, reverse=True)
-            for level in sorted_maturity_levels:
-                if ejemplar_nombre.endswith(f"_{level}"):
-                    etiqueta_real = level
-                    break
+            imagenes_en_esta_clase_dir += 1
+            stats_por_clase_real[clase_para_stats]['total'] += 1
+            if clase_para_stats != 'Desconocida':
+                total_imagenes_clases_conocidas +=1
+            else: # Si es desconocida por el nombre del dir
+                unrecognized_dirs_warnings[etiqueta_real_clase_original] +=1
 
-            img_file = next((f for f in os.listdir(ejemplar_dir)             # buscar primer archivo de imagen
-                             if f.lower().endswith(('.png','.jpg','.jpeg'))), None)
-            
-            current_res = {
-                'ejemplar': ejemplar_nombre,
-                'etiqueta_real': etiqueta_real if etiqueta_real else 'Desconocida',
-                'prediccion_madurez': 'N/A',
-                'probabilidad': 0
-            }
-
-            if not img_file:
-                current_res['prediccion_madurez'] = 'Error - No se encontró imagen'
-                resultados_por_fruta[fruta_tipo].append(current_res)
-                continue
-            
             try:
-                img = Image.open(os.path.join(ejemplar_dir, img_file)).convert('RGB')
+                img = Image.open(img_file_path).convert('RGB')
                 img_resized = img.resize(img_size)
                 arr = np.expand_dims(np.array(img_resized)/255.0, 0)
-                pred_vector = model.predict(arr)[0]
+                pred_vector = model.predict(arr, verbose=0)[0] 
                 pred_idx = np.argmax(pred_vector)
                 nivel_madurez_pred = label_map[pred_idx]
-                probabilidad = pred_vector[pred_idx]
 
-                current_res['prediccion_madurez'] = nivel_madurez_pred
-                current_res['probabilidad'] = float(probabilidad)
+                stats_por_clase_real[clase_para_stats]['predicciones'][nivel_madurez_pred] += 1
 
-                if etiqueta_real and etiqueta_real != 'Desconocida': # Solo contar para accuracy si hay etiqueta real válida
-                    total_evaluadas += 1
-                    if nivel_madurez_pred == etiqueta_real:
-                        correctas_global += 1
-                
-            except Exception as e:
-                print(f"Error procesando {os.path.join(ejemplar_dir, img_file)}: {e}")
-                current_res['prediccion_madurez'] = f'Error - {e}'
-            
-            resultados_por_fruta[fruta_tipo].append(current_res)
+                if clase_para_stats != 'Desconocida':
+                    if nivel_madurez_pred == clase_para_stats:
+                        stats_por_clase_real[clase_para_stats]['correctas'] += 1
+                        correctas_global_clases_conocidas += 1
+            except Exception: # Simplificado, error ya se logea si es necesario arriba o se ignora
+                errores_procesamiento_general += 1 # Contar errores generales si es necesario reportarlos
 
-    # Imprimir los resultados de fo
-    if not resultados_por_fruta:
-        print("No se encontraron imágenes para procesar en el directorio de test.")
-        return
+    # --- INICIO DE NUEVO LOGEO FORMATEADO ---
 
-    for fruta_tipo, ejemplares in resultados_por_fruta.items():
-        print(f"\nFruta Tipo: {fruta_tipo}")
-        if not ejemplares:
-            print("  No se encontraron ejemplares o imágenes para este tipo de fruta.")
-            continue
-        for res in ejemplares:
-            print(f"  Ejemplar: {res['ejemplar']:<30} | Real: {res['etiqueta_real']:<15} | Pred: {res['prediccion_madurez']:<15} (Prob: {res['probabilidad']:.2f})")
-    
-    print("\n--- Resumen de Evaluación en Test ---")
-    if total_evaluadas > 0:
-        accuracy_global = (correctas_global / total_evaluadas) * 100
-        print(f"Imágenes evaluadas (con etiqueta real conocida): {total_evaluadas}")
-        print(f"Predicciones correctas: {correctas_global}")
-        print(f"Precisión Global en Test: {accuracy_global:.2f}%")
+    # 0. Advertencias de directorios no reconocidos
+    if unrecognized_dirs_warnings:
+        for dir_name, count in unrecognized_dirs_warnings.items():
+            if count > 0: # Solo mostrar si realmente hubo imágenes en ese dir no reconocido
+                 print_color(f"[WARNING] Directorio '{dir_name}' no reconocido → agrupado como 'Desconocida' ({count} imágenes).", "amarillo")
+        print("") # Salto de línea después de las advertencias
+
+    print(f"=== Resultados de Inferencia: {fruit_type_arg.upper()} ===")
+    print("")
+
+    # 1. Resumen General
+    print("1. Resumen General")
+    if total_imagenes_clases_conocidas > 0:
+        print(f"   • Clases conocidas: {total_imagenes_clases_conocidas} imágenes")
+        acc_global = (correctas_global_clases_conocidas / total_imagenes_clases_conocidas * 100) if total_imagenes_clases_conocidas > 0 else 0
+        print(f"     – Correctas: {correctas_global_clases_conocidas} → Precisión global: {acc_global:.2f}%")
     else:
-        print("No se pudieron evaluar imágenes con etiquetas reales conocidas.")
-        print("Asegúrate de que los nombres de las carpetas de ejemplares en 'dataset/test' sigan la convención: nombre_ejemplar_etiquetaverdadera")
+        print("   • Clases conocidas: 0 imágenes")
 
-    print("-------------------------------------------------------")
+    if stats_por_clase_real['Desconocida']['total'] > 0:
+        print(f"   • Imágenes 'Desconocida': {stats_por_clase_real['Desconocida']['total']}")
+        pred_desconocida_resumen_parts = []
+        for pred_label, count in sorted(stats_por_clase_real['Desconocida']['predicciones'].items()):
+            if count > 0:
+                pred_desconocida_resumen_parts.append(f"{pred_label}={count}")
+        if pred_desconocida_resumen_parts:
+            print(f"     – Predicciones: {', '.join(pred_desconocida_resumen_parts)}")
+    print("")
+
+    # 2. Desglose por Clase
+    print("2. Desglose por Clase")
+    for nivel_real_key in NIVEL_DE_MADUREZ: # Iterar en el orden definido
+        stats = stats_por_clase_real[nivel_real_key]
+        if stats['total'] == 0: # No mostrar clases si no hubo imágenes de test para ellas
+            continue
+
+        # Adaptar nombre para mostrar (ej. 'descomposicion' a 'descomposición')
+        nombre_clase_display = nivel_real_key.replace("descomposicion", "descomposición")
+
+        print(f"\n   • {nombre_clase_display}")
+        num_predichas_clase = sum(stats['predicciones'].values())
+        acc_clase = (stats['correctas'] / num_predichas_clase * 100) if num_predichas_clase > 0 else 0
+        print(f"     – Total: {stats['total']} | Correctas: {stats['correctas']} ({acc_clase:.2f}%)")
+        
+        pred_str_parts = []
+        for nivel_pred, count in sorted(stats['predicciones'].items()):
+            if count > 0:
+                # Adaptar nombre para mostrar en predicciones también
+                nivel_pred_display = nivel_pred.replace("descomposicion", "descomposición")
+                pred_str_parts.append(f"{nivel_pred_display}={count}")
+        if pred_str_parts:
+             print(f"     – Predicciones: {', '.join(pred_str_parts)}")
+    print("")
+
+    # 3. Predicciones para "Desconocida" (si aplica)
+    if stats_por_clase_real['Desconocida']['total'] > 0:
+        print("3. Predicciones para 'Desconocida'")
+        print(f"   • Total: {stats_por_clase_real['Desconocida']['total']}")
+        pred_desconocida_detalle_parts = []
+        for pred_label, count in sorted(stats_por_clase_real['Desconocida']['predicciones'].items()):
+            if count > 0:
+                 # Adaptar nombre para mostrar en predicciones también
+                pred_label_display = pred_label.replace("descomposicion", "descomposición")
+                pred_desconocida_detalle_parts.append(f"{pred_label_display}={count}")
+        if pred_desconocida_detalle_parts:
+            print(f"   • Predicciones: {', '.join(pred_desconocida_detalle_parts)}")
+        print("")
+        
+    if errores_procesamiento_general > 0:
+        print_color(f"[INFO] Se produjeron {errores_procesamiento_general} errores durante el procesamiento de algunas imágenes.", "amarillo")
+        print("")
+
+    print("=== Fin de la inferencia ===")
+    # Ya no se necesitan los recordatorios de estructura aquí, se asume que el warning inicial es suficiente.
 
 # 6) Función principal: entrenar red y luego inferir en test
 def main():
-    global train_gen, model  # declarar variables globales usadas en inferencia
+    global DATASET_DIR, LOGS_DIR, train_gen, model  # declarar variables globales usadas en inferencia
 
     parser = argparse.ArgumentParser(description='Entrenar y evaluar una CNN para clasificación de madurez de frutas.')
+    parser.add_argument('--fruit_type', type=str, default='bananas', choices=['bananas', 'tomates'],
+                        help='Tipo de fruta para entrenar/evaluar (ej: bananas, tomates). Default: bananas')
     parser.add_argument('--use_best_model', action='store_true',
-                        help='Si se especifica, intenta cargar el mejor modelo guardado previamente. Si no, reentrena por defecto.')
+                        help='Si se especifica, intenta cargar el mejor modelo guardado previamente para la fruta. Si no, reentrena por defecto.')
     args = parser.parse_args()
+    
+    fruit_type_arg = args.fruit_type
+    print_color(f"Procesando para el tipo de fruta: {fruit_type_arg}", color="magenta")
 
-    train_gen, val_gen = crear_generadores()  # crear generadores
+    # Establecer rutas específicas para la fruta
+    DATASET_DIR = DATASET_ROOT_DEFAULT / fruit_type_arg
+    LOGS_DIR = LOGS_ROOT_DEFAULT / fruit_type_arg
+
+    # Crear directorios si no existen
+    DATASET_DIR.mkdir(parents=True, exist_ok=True)
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    # Es buena práctica asegurar que los subdirectorios 'train' y 'test' también existan si la lógica depende de ellos
+    # (DATASET_DIR / "train").mkdir(parents=True, exist_ok=True)
+    # (DATASET_DIR / "test").mkdir(parents=True, exist_ok=True)
+
+
+    train_gen, val_gen = crear_generadores()  # crear generadores (usa global DATASET_DIR)
+    if train_gen is None or val_gen is None:
+        print_color(f"No se pudieron crear los generadores de datos para {fruit_type_arg}. Abortando.", color="rojo")
+        return
+
     model = crear_modelo()                                    # construir y compilar modelo
     model.summary()                                           # mostrar arquitectura
     
@@ -216,86 +316,156 @@ def main():
     load_model_attempted = False
 
     if args.use_best_model:
-        print_color("Intentando cargar el mejor modelo pre-entrenado...", color="amarillo")
-        all_runs = sorted(os.listdir(LOGS_DIR)) if os.path.exists(LOGS_DIR) else []
-        for run in reversed(all_runs):
-            candidate = os.path.join(LOGS_DIR, run, 'best_model.keras')
-            if os.path.exists(candidate):
-                BEST_MODEL_PATH = candidate
-                break
+        print_color(f"Intentando cargar el mejor modelo pre-entrenado para '{fruit_type_arg}'...", color="amarillo")
+        # Buscar el modelo en el LOGS_DIR específico de la fruta
+        if LOGS_DIR.exists():
+            all_runs = sorted([d for d in LOGS_DIR.iterdir() if d.is_dir()], reverse=True) # Más recientes primero
+            for run_dir in all_runs:
+                candidate = run_dir / 'best_model.keras'
+                if candidate.exists():
+                    BEST_MODEL_PATH = candidate
+                    break
         
         if BEST_MODEL_PATH:
             try:
                 model = tf.keras.models.load_model(BEST_MODEL_PATH)
-                print_color(f"Modelo pre-entrenado cargado desde: {BEST_MODEL_PATH}. Saltando entrenamiento.", color="verde")
+                print_color(f"Modelo pre-entrenado para '{fruit_type_arg}' cargado desde: {BEST_MODEL_PATH}. Saltando entrenamiento.", color="verde")
                 load_model_attempted = True
             except Exception as e:
-                print_color(f"Error al cargar el modelo desde {BEST_MODEL_PATH}: {e}. Se procederá a entrenar.", color="rojo")
+                print_color(f"Error al cargar el modelo desde {BEST_MODEL_PATH} para '{fruit_type_arg}': {e}. Se procederá a entrenar.", color="rojo")
                 BEST_MODEL_PATH = None # Asegurar que no se intente usar un modelo corrupto
         else:
-            print_color("No se encontró un modelo pre-entrenado. Se procederá a entrenar.", color="amarillo")
+            print_color(f"No se encontró un modelo pre-entrenado para '{fruit_type_arg}'. Se procederá a entrenar.", color="amarillo")
     
     if not load_model_attempted or not BEST_MODEL_PATH:
-        if not args.use_best_model:
-             print_color("No se especificó --use_best_model o no se encontró/pudo cargar. Entrenando nuevo modelo...", color="magenta")
+        if not args.use_best_model: # Si no se pidió usar el mejor modelo, o si falló la carga
+             print_color(f"Entrenando nuevo modelo para '{fruit_type_arg}'...", color="magenta")
         
         # Calcular class weights
-        classes = np.array(train_gen.classes) # Obtener todas las etiquetas de clase del generador
-        # Asegurarse de que las etiquetas sean numéricas para compute_class_weight
-        # train_gen.classes devuelve los índices de clase para cada muestra, que es lo que necesitamos
+        classes = np.array(train_gen.classes) 
         
         class_weights_calculated = class_weight.compute_class_weight(
-            'balanced',
-            classes=np.unique(classes), # Clases únicas presentes en los datos
-            y=classes                   # Todas las etiquetas de clase
+            class_weight='balanced', # Corregido el nombre del argumento
+            classes=np.unique(classes), 
+            y=classes
         )
-        # Crear el diccionario de class_weight para model.fit
-        # train_gen.class_indices mapea nombres de clase a índices: {'descomposicion': 0, 'inmaduro': 1, ...}
-        # Necesitamos mapear los pesos calculados (que están en el orden de np.unique(classes)) a los índices correctos
         class_weights_dict = dict(enumerate(class_weights_calculated))
         
-        print_color(f"Pesos de clase calculados: {class_weights_dict}", color="cyan")
+        print_color(f"Pesos de clase calculados para '{fruit_type_arg}': {class_weights_dict}", color="cyan")
 
         current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-        run_log_dir  = os.path.join(LOGS_DIR, current_time)
-        os.makedirs(run_log_dir, exist_ok=True)
+        run_log_dir  = LOGS_DIR / current_time # Usar LOGS_DIR específico de la fruta
+        run_log_dir.mkdir(parents=True, exist_ok=True)
 
         # callbacks solo si vamos a entrenar
         tb_cb = TensorBoard(log_dir=run_log_dir, histogram_freq=1)
-        es_cb = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True, verbose=1)
-        mc_cb = ModelCheckpoint(filepath=os.path.join(run_log_dir, 'best_model.keras'), monitor='val_loss', save_best_only=True, verbose=1)
-        lr_cb = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=3, min_lr=1e-6, verbose=1)
+        es_cb = EarlyStopping(monitor='val_loss', patience=2, restore_best_weights=True, verbose=1)
+        best_model_filepath = run_log_dir / 'best_model.keras'
+        mc_cb = ModelCheckpoint(filepath=best_model_filepath, monitor='val_loss', save_best_only=True, verbose=1)
+        lr_cb = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, min_lr=1e-6, verbose=1)
         callbacks_list = [tb_cb, es_cb, mc_cb, lr_cb]
 
-        model.fit(
+        print_color(f"Iniciando entrenamiento del modelo para {fruit_type_arg}...", color="cyan")
+        
+        initial_lr = model.optimizer.learning_rate.numpy() if hasattr(model.optimizer.learning_rate, 'numpy') else model.optimizer.learning_rate # O directamente 1e-4 si es fijo
+        
+        start_time = time.time()
+        history = model.fit(
             train_gen,
             validation_data=val_gen,
-            epochs=10, # Ajustar epochs según sea necesario
+            epochs=10, # Ajustar epochs según sea necesario (aumentado para dar más margen con EarlyStopping)
             callbacks=callbacks_list,
             class_weight=class_weights_dict # Aplicar pesos de clase
         )
-        # Guardar explícitamente el modelo después del entrenamiento si no se usó ModelCheckpoint para el mejor modelo
-        # o si se quiere guardar el modelo final independientemente.
-        # model.save(os.path.join(run_log_dir, 'final_model.keras')) 
-        print_color("Entrenamiento completado.", color="verde")
+        end_time = time.time()
+        print_color(f"Entrenamiento completado para '{fruit_type_arg}'.", color="verde")
+
+        # --- INICIO DE LOGEO DE ENTRENAMIENTO FORMATEADO ---
+        print(f"\n=== Registro de Entrenamiento: {fruit_type_arg.upper()} ===")
+        
+        epochs_trained = len(history.history['loss'])
+        total_training_time = end_time - start_time
+        avg_time_per_epoch = total_training_time / epochs_trained if epochs_trained > 0 else 0
+        batches_per_epoch = len(train_gen)
+
+        print("\n1. Información General")
+        print(f"   • Epochs entrenados: {epochs_trained}")
+        print(f"   • Batches por epoch: {batches_per_epoch}")
+        print(f"   • Duración promedio por epoch: ≈{avg_time_per_epoch:.0f} s (≈{avg_time_per_epoch/batches_per_epoch:.2f} s/step)")
+        # Para mostrar el LR en notación científica como 1.00 x 10⁻⁴
+        print(f"   • Learning rate inicial: {initial_lr:.2e}".replace("e-0", " × 10⁻").replace("e-", " × 10⁻"))
+
+
+        print("\n2. Métricas por Epoch")
+        current_best_val_loss = float('inf')
+        for i in range(epochs_trained):
+            print(f"\n   • Epoch {i+1}")
+            train_acc = history.history['accuracy'][i] * 100
+            train_loss = history.history['loss'][i]
+            val_acc = history.history['val_accuracy'][i] * 100
+            val_loss = history.history['val_loss'][i]
+
+            print(f"     – Entrenamiento: accuracy = {train_acc:.2f} %, loss = {train_loss:.4f}")
+            print(f"     – Validación:   accuracy = {val_acc:.2f} %, loss = {val_loss:.4f}")
+            
+            val_loss_msg = ""
+            if val_loss < current_best_val_loss:
+                val_loss_msg = f"val_loss mejoró de {current_best_val_loss if current_best_val_loss != float('inf') else 'inf'} → {val_loss:.5f} (modelo guardado)"
+                current_best_val_loss = val_loss
+            else:
+                # Si no mejoró, no se imprime nada según el formato deseado, o se podría añadir un "no mejoró".
+                # El formato del usuario solo muestra cuando mejora.
+                pass 
+            if val_loss_msg: # Solo imprimir si hay mensaje de mejora
+                 print(f"     – {val_loss_msg}")
+
+
+        # La ruta del modelo guardado es la de mc_cb.filepath (la instancia final guardada)
+        # Si EarlyStopping restauró pesos, el modelo final en memoria es el mejor,
+        # pero el archivo mc_cb apunta al mejor *guardado en disco*.
+        print("\n3. Ruta del modelo guardado")
+        final_best_model_path = best_model_filepath # Path que se usó en ModelCheckpoint
+        # Verificar si realmente se guardó (si se ejecutó al menos una vez donde val_loss mejoró)
+        # ModelCheckpoint guarda si save_best_only=True y la métrica mejora.
+        # Una forma de saber si se guardó algo es si el archivo existe y el mc_cb.best no es inf.
+        # O, si el entrenamiento ocurrió, asumir que se guardó si val_loss mejoró alguna vez.
+        # El callback mc_cb ya tiene verbose=1, así que el usuario ve en tiempo real si se guarda.
+        # Aquí solo mostramos la ruta configurada para ello.
+        
+        # Chequear si el mejor modelo realmente existe en la ruta esperada
+        # (puede que no si el entrenamiento fue muy corto y val_loss nunca mejoró)
+        model_saved_path_to_display = "No se guardó un nuevo modelo (val_loss no mejoró o entrenamiento interrumpido)."
+        if best_model_filepath.exists():
+             # Si usamos restore_best_weights=True, el modelo en memoria es el mejor.
+             # La ruta guardada por ModelCheckpoint es la relevante aquí.
+            model_saved_path_to_display = str(best_model_filepath.resolve())
+
+
+        print(f"   {model_saved_path_to_display}")
+
+        print("\n=== Fin del Registro de Entrenamiento ===")
+        # --- FIN DE LOGEO DE ENTRENAMIENTO FORMATEADO ---
 
     # siempre inferir después
-    print_color("Inferencia en test:", color="cyan")
-    inferir_test()                            
+    print_color(f"\nInferencia en test para '{fruit_type_arg}':", color="cyan")
+    inferir_test(fruit_type_arg=fruit_type_arg) # Pasar fruit_type_arg
 
-# Helper para imprimir con colores
+# Helper para imprimir con colores (sin cambios, pero asegurar que funcione en Git Bash)
 def print_color(text, color="default"):
+    # \x1b es el carácter ESCAPE
     colors = {
-        "default": "[0m",
-        "rojo": "[31m",
-        "verde": "[32m",
-        "amarillo": "[33m",
-        "azul": "[34m",
-        "magenta": "[35m",
-        "cyan": "[36m",
+        "default": "\x1b[0m", # Reset
+        "rojo": "\x1b[31m",   # Red
+        "verde": "\x1b[32m", # Green
+        "amarillo": "\x1b[33m", # Yellow
+        "azul": "\x1b[34m",    # Blue
+        "magenta": "\x1b[35m", # Magenta
+        "cyan": "\x1b[36m",    # Cyan
     }
+    # En Windows Git Bash, estos códigos ANSI deberían funcionar.
+    # Para cmd.exe nativo, se necesitaría `colorama` o similar, pero el user shell es Git Bash.
     end_color = colors["default"]
-    start_color = colors.get(color.lower(), end_color)
+    start_color = colors.get(color.lower(), colors["default"]) # Usar default si el color no existe
     print(start_color + text + end_color)
 
 if __name__ == '__main__':
