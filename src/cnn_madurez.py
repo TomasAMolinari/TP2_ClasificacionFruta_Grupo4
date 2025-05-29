@@ -295,22 +295,56 @@ def inferir_test(test_dir_param=None, img_size=(250,250), fruit_type_arg="N/A"):
     # ==== Matriz de confusión ====
     cm = confusion_matrix(y_true, y_pred, labels=list(range(len(NIVEL_DE_MADUREZ))))
     df_cm = pd.DataFrame(cm, index=NIVEL_DE_MADUREZ, columns=NIVEL_DE_MADUREZ)
-    
-    print("\n=== Matriz de confusión ===") 
-    # Printea guía para entender cómo funciona la matriz
-    fila_maduro = df_cm.loc['maduro']
 
-    total = int(fila_maduro.sum())
-    aciertos = int(fila_maduro['maduro'])
-    err_inmaduro = int(fila_maduro['inmaduro'])
-    err_sobremaduro = int(fila_maduro['sobre-maduro'])
-    err_descomposicion = int(fila_maduro['descomposicion'])
+    # --- NUEVO LOG FORMATO TABLA ---
+    print(f"\n=== Matriz de Confusión: {fruit_type_arg.upper()} ===\n")
+    print("3. Matriz de Confusión\n")
+
+    col_names_display = [c.replace('descomposicion', 'descomposición') for c in NIVEL_DE_MADUREZ]
     
-    print("columnas: clases previstas o esperadas")
-    print("filas: clases reales")
-    print(f"ejemplo: clase maduro => total:{total}, aciertos:{aciertos}, errores => etiquetadas cómo 'inmaduro':{err_inmaduro},cómo 'sobre-maduro':{err_sobremaduro}, cómo descomposición:{err_descomposicion}")
-    print(df_cm.to_string())
-    # Ya no se necesitan los recordatorios de estructura aquí, se asume que el warning inicial es suficiente.
+    real_col_width = 14 
+    pred_col_width = 14 
+    total_col_width = 7  # Ancho para la columna "Total"
+    aciertos_col_width = 18 # Ancho para la columna "Aciertos (%)"
+    # La columna "Errores (desglose)" tomará el espacio restante, pero su inicio debe estar alineado.
+
+    # Cabecera
+    header_line = f"{'Real ↓':<{real_col_width}} {'Predichas →':<12}" 
+    for col_name in col_names_display:
+        header_line += f" {col_name:>{pred_col_width}}"
+    
+    header_line += f" | {'Total':>{total_col_width}} | {'Aciertos (%)':>{aciertos_col_width}} | Errores (desglose)"
+    print(header_line)
+    print("─" * len(header_line)) 
+
+    # Filas
+    for i, real_class_key in enumerate(NIVEL_DE_MADUREZ):
+        real_class_display = real_class_key.replace('descomposicion', 'descomposición')
+        row_str = f"{real_class_display:<{real_col_width}} {'':<12}" # Espacio para alinear bajo "Predichas ->"
+        
+        total_real = 0
+        aciertos_real = 0
+        errores_desglose_parts = []
+
+        for j, pred_class_key in enumerate(NIVEL_DE_MADUREZ):
+            valor_celda = int(df_cm.loc[real_class_key, pred_class_key])
+            row_str += f" {valor_celda:>{pred_col_width}}"
+            total_real += valor_celda
+            if real_class_key == pred_class_key:
+                aciertos_real = valor_celda
+            elif valor_celda > 0:
+                pred_class_display = pred_class_key.replace('descomposicion', 'descomposición')
+                errores_desglose_parts.append(f"{pred_class_display}={valor_celda}")
+        
+        porcentaje_aciertos = (aciertos_real / total_real * 100) if total_real > 0 else 0
+        aciertos_str = f"{aciertos_real} ({porcentaje_aciertos:.2f} %)"
+        errores_str = ", ".join(errores_desglose_parts) if errores_desglose_parts else "-"
+
+        # Ajustar el espaciado para las últimas columnas aquí
+        row_str += f" | {total_real:>{total_col_width}} | {aciertos_str:>{aciertos_col_width}} | {errores_str}"
+        print(row_str)
+
+    print(f"\n=== Fin de la Matriz de Confusión ===\n")
 
 # --- FUNCIÓN PRINCIPAL (MAIN) ---
 # 6) Función principal: entrenar red y luego inferir en test
@@ -396,7 +430,7 @@ def main():
 
         # callbacks solo si vamos a entrenar
         tb_cb = TensorBoard(log_dir=run_log_dir, histogram_freq=1)
-        es_cb = EarlyStopping(monitor='val_loss', patience=4, restore_best_weights=True, verbose=1)
+        es_cb = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True, verbose=1)
         best_model_filepath = run_log_dir / 'best_model.keras'
         mc_cb = ModelCheckpoint(filepath=best_model_filepath, monitor='val_loss', save_best_only=True, verbose=1)
         lr_cb = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, min_lr=1e-6, verbose=1)
@@ -410,7 +444,7 @@ def main():
         history = model.fit(
             train_gen,
             validation_data=val_gen,
-            epochs=10, # Ajustar epochs según sea necesario (aumentado para dar más margen con EarlyStopping)
+            epochs=50, # Ajustar epochs según sea necesario (aumentado para dar más margen con EarlyStopping)
             callbacks=callbacks_list,
             class_weight=class_weights_dict # Aplicar pesos de clase
         )
