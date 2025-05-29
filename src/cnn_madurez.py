@@ -396,7 +396,7 @@ def main():
 
         # callbacks solo si vamos a entrenar
         tb_cb = TensorBoard(log_dir=run_log_dir, histogram_freq=1)
-        es_cb = EarlyStopping(monitor='val_loss', patience=2, restore_best_weights=True, verbose=1)
+        es_cb = EarlyStopping(monitor='val_loss', patience=4, restore_best_weights=True, verbose=1)
         best_model_filepath = run_log_dir / 'best_model.keras'
         mc_cb = ModelCheckpoint(filepath=best_model_filepath, monitor='val_loss', save_best_only=True, verbose=1)
         lr_cb = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, min_lr=1e-6, verbose=1)
