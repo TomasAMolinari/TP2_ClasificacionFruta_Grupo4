@@ -30,6 +30,8 @@ from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, Flatten, Dense,
 from tensorflow.keras.preprocessing.image import ImageDataGenerator  # herramienta para augmentación y preprocesamiento de imágenes
 from tensorflow.keras.callbacks import TensorBoard, EarlyStopping, ModelCheckpoint, ReduceLROnPlateau  # callbacks para visualización y detención temprana
 from tensorflow.keras.optimizers import Adam  # optimizador Adam para entrenar
+from sklearn.metrics import confusion_matrix
+import pandas as pd
 
 
 # PROJECT_ROOT: carpeta donde vive este script
@@ -59,7 +61,7 @@ NIVEL_DE_MADUREZ = [
 # generadores de entrenamiento y validación (estructura esperada: train/<clase>/*.jpg)
 def crear_generadores(
     data_dir_param=None, # Se resolverá a DATASET_DIR / 'train' si es None
-    img_size=(150, 150),
+    img_size=(250, 250),
     batch_size=16,
     val_split=0.2
 ):
@@ -118,7 +120,7 @@ def conv_block(x, filters):
     return MaxPooling2D((2,2))(x)  # reducir dimensiones espaciales a la mitad
 
 # 4) Función para crear y compilar el modelo CNN completo
-def crear_modelo(input_shape=(150,150,3), n_classes=len(NIVEL_DE_MADUREZ)):
+def crear_modelo(input_shape=(250,250,3), n_classes=len(NIVEL_DE_MADUREZ)):
     inp = Input(shape=input_shape)             # definir tensor de entrada
     x = conv_block(inp, 128)
     x = conv_block(x, 64)
@@ -140,7 +142,7 @@ def crear_modelo(input_shape=(150,150,3), n_classes=len(NIVEL_DE_MADUREZ)):
 
 # --- FUNCIÓN DE INFERENCIA EN EL CONJUNTO DE TEST ---
 # 5) Función para inferir sobre los ejemplares en carpeta de test
-def inferir_test(test_dir_param=None, img_size=(150,150), fruit_type_arg="N/A"):
+def inferir_test(test_dir_param=None, img_size=(250,250), fruit_type_arg="N/A"):
     actual_test_dir = test_dir_param if test_dir_param else DATASET_DIR / 'test'
     if not actual_test_dir.is_dir():
         print_color(f"[ERROR] Directorio de test no encontrado para {fruit_type_arg}: {actual_test_dir}", color="rojo")
@@ -165,12 +167,18 @@ def inferir_test(test_dir_param=None, img_size=(150,150), fruit_type_arg="N/A"):
     total_imagenes_clases_conocidas = 0
     correctas_global_clases_conocidas = 0
     
+    y_true = [] # Valores para la matriz de confusión
+    y_pred = [] # Valores para la matriz de confusión
     for clase_dir in actual_test_dir.iterdir():
         if not clase_dir.is_dir():
             continue
         
         etiqueta_real_clase_original = clase_dir.name
         clase_para_stats = 'Desconocida'
+        
+        for img_file_path in clase_dir.iterdir():
+            if not (img_file_path.is_file() and img_file_path.suffix.lower() in ('.png','.jpg','.jpeg')):
+                continue
 
         if etiqueta_real_clase_original in NIVEL_DE_MADUREZ:
             clase_para_stats = etiqueta_real_clase_original
@@ -197,7 +205,9 @@ def inferir_test(test_dir_param=None, img_size=(150,150), fruit_type_arg="N/A"):
                 pred_vector = model.predict(arr, verbose=0)[0] 
                 pred_idx = np.argmax(pred_vector)
                 nivel_madurez_pred = label_map[pred_idx]
-
+                y_true.append(NIVEL_DE_MADUREZ.index(etiqueta_real_clase_original))
+                y_pred.append(NIVEL_DE_MADUREZ.index(nivel_madurez_pred))
+                     
                 stats_por_clase_real[clase_para_stats]['predicciones'][nivel_madurez_pred] += 1
 
                 if clase_para_stats != 'Desconocida':
@@ -282,6 +292,24 @@ def inferir_test(test_dir_param=None, img_size=(150,150), fruit_type_arg="N/A"):
         print("")
 
     print("=== Fin de la inferencia ===")
+    # ==== Matriz de confusión ====
+    cm = confusion_matrix(y_true, y_pred, labels=list(range(len(NIVEL_DE_MADUREZ))))
+    df_cm = pd.DataFrame(cm, index=NIVEL_DE_MADUREZ, columns=NIVEL_DE_MADUREZ)
+    
+    print("\n=== Matriz de confusión ===") 
+    # Printea guía para entender cómo funciona la matriz
+    fila_maduro = df_cm.loc['maduro']
+
+    total = int(fila_maduro.sum())
+    aciertos = int(fila_maduro['maduro'])
+    err_inmaduro = int(fila_maduro['inmaduro'])
+    err_sobremaduro = int(fila_maduro['sobre-maduro'])
+    err_descomposicion = int(fila_maduro['descomposicion'])
+    
+    print("columnas: clases previstas o esperadas")
+    print("filas: clases reales")
+    print(f"ejemplo: clase maduro => total:{total}, aciertos:{aciertos}, errores => etiquetadas cómo 'inmaduro':{err_inmaduro},cómo 'sobre-maduro':{err_sobremaduro}, cómo descomposición:{err_descomposicion}")
+    print(df_cm.to_string())
     # Ya no se necesitan los recordatorios de estructura aquí, se asume que el warning inicial es suficiente.
 
 # --- FUNCIÓN PRINCIPAL (MAIN) ---
