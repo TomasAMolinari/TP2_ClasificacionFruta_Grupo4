@@ -34,7 +34,7 @@ from sklearn.metrics import confusion_matrix
 import pandas as pd
 
 
-# PROJECT_ROOT: carpeta donde vive este script
+# PROJECT_ROOT: carpeta donde del script
 PROJECT_ROOT = Path(__file__).resolve().parent
 # Rutas raíz por defecto, las rutas específicas por fruta se derivarán en main()
 DATASET_ROOT_DEFAULT = (PROJECT_ROOT / ".." / "dataset").resolve()
@@ -72,23 +72,23 @@ def crear_generadores(
         return None, None # Devuelve None si el directorio no existe
 
     datagen = ImageDataGenerator(
-        rescale=1./255,          # escala de píxeles a [0,1], acelerando aprendizaje
-        rotation_range=30,       # rotaciones aleatorias hasta ±30° (reducido de 60)
-        zoom_range=[0.8, 1.2],   # zoom aleatorio entre 80% y 120% (reducido de [0.15,1.85])
-        width_shift_range=0.15,  # desplazamientos horizontales hasta 15% (reducido de 0.5)
-        height_shift_range=0.15, # desplazamientos verticales hasta 15% (reducido de 0.5)
-        horizontal_flip=True,    # inversión horizontal aleatoria
-        validation_split=val_split  # 20% de datos para validación
+        rescale=1./255,             # escala de píxeles a [0,1], acelerando aprendizaje
+        rotation_range=30,          # rotaciones aleatorias hasta ±30°
+        zoom_range=[0.8, 1.2],      # zoom aleatorio entre 80% y 120%
+        width_shift_range=0.15,     # desplazamientos horizontales hasta 15%
+        height_shift_range=0.15,    # desplazamientos verticales hasta 15%
+        horizontal_flip=True,       # inversión horizontal aleatoria
+        validation_split=val_split  # % de datos para validación
     )
 
     try:
         train_generator = datagen.flow_from_directory(
             actual_data_dir,
-            target_size=img_size,    # fuerza a las imágenes en 100×100 px
-            batch_size=batch_size,   # lotes de 16 muestras
-            classes=NIVEL_DE_MADUREZ, # orden de etiquetas fijo
-            class_mode='categorical',# salida one-hot multiclase
-            subset='training'        # partición de entrenamiento
+            target_size=img_size,       # fuerza a las imágenes en 100×100 px
+            batch_size=batch_size,      # lotes de 16 muestras
+            classes=NIVEL_DE_MADUREZ,   # orden de etiquetas fijo
+            class_mode='categorical',   # salida one-hot multiclase
+            subset='training'           # partición de entrenamiento
         )
 
         val_generator = datagen.flow_from_directory(
@@ -121,16 +121,16 @@ def conv_block(x, filters):
 
 # 4) Función para crear y compilar el modelo CNN completo
 def crear_modelo(input_shape=(250,250,3), n_classes=len(NIVEL_DE_MADUREZ)):
-    inp = Input(shape=input_shape)             # definir tensor de entrada
+    inp = Input(shape=input_shape)                                                                  # definir tensor de entrada
     x = conv_block(inp, 128)
     x = conv_block(x, 64)
     x = conv_block(x, 32)
-    x = Flatten()(x)                           # aplanar salida para capa densa
+    x = Flatten()(x)                                                                               # aplanar salida para capa densa
     x = Dense(128, activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)       # capa densa intermedia con activación ReLU
-    x = BatchNormalization()(x)                # añadir BatchNormalization
-    x = Dropout(0.4)(x)                        # aplicar dropout 40% para evitar overfitting (aumentado de 0.2)
-    out = Dense(n_classes, activation='softmax')(x)  # capa de salida con softmax para clasificar
-    model_cnn = Model(inputs=inp, outputs=out)     # crear modelo funcional
+    x = BatchNormalization()(x)                                                                    # añadir BatchNormalization
+    x = Dropout(0.4)(x)                                                                            # aplicar dropout 40% para evitar overfitting (aumentado de 0.2)
+    out = Dense(n_classes, activation='softmax')(x)                                                # capa de salida con softmax para clasificar
+    model_cnn = Model(inputs=inp, outputs=out)                                                     # crear modelo funcional
 
     model_cnn.compile(
         optimizer=Adam(1e-4),                             # Adam con lr=0.0001
@@ -217,7 +217,7 @@ def inferir_test(test_dir_param=None, img_size=(250,250), fruit_type_arg="N/A"):
             except Exception: # Simplificado, error ya se logea si es necesario arriba o se ignora
                 errores_procesamiento_general += 1 # Contar errores generales si es necesario reportarlos
 
-    # --- INICIO DE NUEVO LOGEO FORMATEADO ---
+    # --- INICIO DE LOGEO ---
 
     # 0. Advertencias de directorios no reconocidos
     if unrecognized_dirs_warnings:
@@ -295,22 +295,56 @@ def inferir_test(test_dir_param=None, img_size=(250,250), fruit_type_arg="N/A"):
     # ==== Matriz de confusión ====
     cm = confusion_matrix(y_true, y_pred, labels=list(range(len(NIVEL_DE_MADUREZ))))
     df_cm = pd.DataFrame(cm, index=NIVEL_DE_MADUREZ, columns=NIVEL_DE_MADUREZ)
-    
-    print("\n=== Matriz de confusión ===") 
-    # Printea guía para entender cómo funciona la matriz
-    fila_maduro = df_cm.loc['maduro']
 
-    total = int(fila_maduro.sum())
-    aciertos = int(fila_maduro['maduro'])
-    err_inmaduro = int(fila_maduro['inmaduro'])
-    err_sobremaduro = int(fila_maduro['sobre-maduro'])
-    err_descomposicion = int(fila_maduro['descomposicion'])
+    # --- LOG MATRIZ CONFUSION EN FORMATO TABLA ---
+    print(f"\n=== Matriz de Confusión: {fruit_type_arg.upper()} ===\n")
+    print("3. Matriz de Confusión\n")
+
+    col_names_display = [c.replace('descomposicion', 'descomposición') for c in NIVEL_DE_MADUREZ]
     
-    print("columnas: clases previstas o esperadas")
-    print("filas: clases reales")
-    print(f"ejemplo: clase maduro => total:{total}, aciertos:{aciertos}, errores => etiquetadas cómo 'inmaduro':{err_inmaduro},cómo 'sobre-maduro':{err_sobremaduro}, cómo descomposición:{err_descomposicion}")
-    print(df_cm.to_string())
-    # Ya no se necesitan los recordatorios de estructura aquí, se asume que el warning inicial es suficiente.
+    real_col_width = 14 
+    pred_col_width = 14 
+    total_col_width = 7  # Ancho para la columna "Total"
+    aciertos_col_width = 18 # Ancho para la columna "Aciertos (%)"
+    # La columna "Errores (desglose)" tomará el espacio restante, pero su inicio debe estar alineado.
+
+    # Cabecera
+    header_line = f"{'Real ↓':<{real_col_width}} {'Predichas →':<12}" 
+    for col_name in col_names_display:
+        header_line += f" {col_name:>{pred_col_width}}"
+    
+    header_line += f" | {'Total':>{total_col_width}} | {'Aciertos (%)':>{aciertos_col_width}} | Errores (desglose)"
+    print(header_line)
+    print("─" * len(header_line)) 
+
+    # Filas
+    for i, real_class_key in enumerate(NIVEL_DE_MADUREZ):
+        real_class_display = real_class_key.replace('descomposicion', 'descomposición')
+        row_str = f"{real_class_display:<{real_col_width}} {'':<12}" # Espacio para alinear bajo "Predichas ->"
+        
+        total_real = 0
+        aciertos_real = 0
+        errores_desglose_parts = []
+
+        for j, pred_class_key in enumerate(NIVEL_DE_MADUREZ):
+            valor_celda = int(df_cm.loc[real_class_key, pred_class_key])
+            row_str += f" {valor_celda:>{pred_col_width}}"
+            total_real += valor_celda
+            if real_class_key == pred_class_key:
+                aciertos_real = valor_celda
+            elif valor_celda > 0:
+                pred_class_display = pred_class_key.replace('descomposicion', 'descomposición')
+                errores_desglose_parts.append(f"{pred_class_display}={valor_celda}")
+        
+        porcentaje_aciertos = (aciertos_real / total_real * 100) if total_real > 0 else 0
+        aciertos_str = f"{aciertos_real} ({porcentaje_aciertos:.2f} %)"
+        errores_str = ", ".join(errores_desglose_parts) if errores_desglose_parts else "-"
+
+        # Ajustar el espaciado para las últimas columnas aquí
+        row_str += f" | {total_real:>{total_col_width}} | {aciertos_str:>{aciertos_col_width}} | {errores_str}"
+        print(row_str)
+
+    print(f"\n=== Fin de la Matriz de Confusión ===\n")
 
 # --- FUNCIÓN PRINCIPAL (MAIN) ---
 # 6) Función principal: entrenar red y luego inferir en test
@@ -334,10 +368,6 @@ def main():
     # Crear directorios si no existen
     DATASET_DIR.mkdir(parents=True, exist_ok=True)
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    # Es buena práctica asegurar que los subdirectorios 'train' y 'test' también existan si la lógica depende de ellos
-    # (DATASET_DIR / "train").mkdir(parents=True, exist_ok=True)
-    # (DATASET_DIR / "test").mkdir(parents=True, exist_ok=True)
-
 
     train_gen, val_gen = crear_generadores()  # crear generadores (usa global DATASET_DIR)
     if train_gen is None or val_gen is None:
@@ -378,6 +408,7 @@ def main():
              print_color(f"Entrenando nuevo modelo para '{fruit_type_arg}'...", color="magenta")
         
         # === BLOQUE DE ENTRENAMIENTO DEL MODELO ===
+
         # Calcular class weights
         classes = np.array(train_gen.classes) 
         
@@ -396,7 +427,7 @@ def main():
 
         # callbacks solo si vamos a entrenar
         tb_cb = TensorBoard(log_dir=run_log_dir, histogram_freq=1)
-        es_cb = EarlyStopping(monitor='val_loss', patience=2, restore_best_weights=True, verbose=1)
+        es_cb = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True, verbose=1)
         best_model_filepath = run_log_dir / 'best_model.keras'
         mc_cb = ModelCheckpoint(filepath=best_model_filepath, monitor='val_loss', save_best_only=True, verbose=1)
         lr_cb = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, min_lr=1e-6, verbose=1)
@@ -410,7 +441,7 @@ def main():
         history = model.fit(
             train_gen,
             validation_data=val_gen,
-            epochs=10, # Ajustar epochs según sea necesario (aumentado para dar más margen con EarlyStopping)
+            epochs=50, # Ajustar epochs según sea necesario (aumentado para dar más margen con EarlyStopping)
             callbacks=callbacks_list,
             class_weight=class_weights_dict # Aplicar pesos de clase
         )
@@ -457,17 +488,8 @@ def main():
                  print(f"     – {val_loss_msg}")
 
 
-        # La ruta del modelo guardado es la de mc_cb.filepath (la instancia final guardada)
-        # Si EarlyStopping restauró pesos, el modelo final en memoria es el mejor,
-        # pero el archivo mc_cb apunta al mejor *guardado en disco*.
         print("\n3. Ruta del modelo guardado")
         final_best_model_path = best_model_filepath # Path que se usó en ModelCheckpoint
-        # Verificar si realmente se guardó (si se ejecutó al menos una vez donde val_loss mejoró)
-        # ModelCheckpoint guarda si save_best_only=True y la métrica mejora.
-        # Una forma de saber si se guardó algo es si el archivo existe y el mc_cb.best no es inf.
-        # O, si el entrenamiento ocurrió, asumir que se guardó si val_loss mejoró alguna vez.
-        # El callback mc_cb ya tiene verbose=1, así que el usuario ve en tiempo real si se guarda.
-        # Aquí solo mostramos la ruta configurada para ello.
         
         # Chequear si el mejor modelo realmente existe en la ruta esperada
         # (puede que no si el entrenamiento fue muy corto y val_loss nunca mejoró)
@@ -481,17 +503,16 @@ def main():
         print(f"   {model_saved_path_to_display}")
 
         print("\n=== Fin del Registro de Entrenamiento ===")
-        # --- FIN DE LOGEO DE ENTRENAMIENTO FORMATEADO ---
+        # --- FIN DE LOGEO DE ENTRENAMIENTO ---
 
     # siempre inferir después
     # === INICIO DE INFERENCIA EN CONJUNTO DE TEST ===
     print_color(f"\nInferencia en test para '{fruit_type_arg}':", color="cyan")
     inferir_test(fruit_type_arg=fruit_type_arg) # Pasar fruit_type_arg
 
-# --- FUNCIÓN UTILITARIA PARA IMPRESIÓN EN COLOR ---
 # Helper para imprimir con colores (sin cambios, pero asegurar que funcione en Git Bash)
 def print_color(text, color="default"):
-    # \x1b es el carácter ESCAPE
+
     colors = {
         "default": "\x1b[0m", # Reset
         "rojo": "\x1b[31m",   # Red
@@ -501,8 +522,7 @@ def print_color(text, color="default"):
         "magenta": "\x1b[35m", # Magenta
         "cyan": "\x1b[36m",    # Cyan
     }
-    # En Windows Git Bash, estos códigos ANSI deberían funcionar.
-    # Para cmd.exe nativo, se necesitaría `colorama` o similar, pero el user shell es Git Bash.
+
     end_color = colors["default"]
     start_color = colors.get(color.lower(), colors["default"]) # Usar default si el color no existe
     print(start_color + text + end_color)
