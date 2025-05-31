@@ -26,13 +26,13 @@ if gpus:
         print(f"Error setting memory growth: {e}")
 
 from tensorflow.keras.models import Model  # API funcional de Keras para definir modelos
-from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, Flatten, Dense, Dropout, BatchNormalization  # capas de red neuronal CNN y dense
+# CAMBIO MLP: Eliminamos Conv2D, MaxPooling2D, BatchNormalization y conv_block
+from tensorflow.keras.layers import Input, Dense, Dropout, Flatten  # capas para MLP
 from tensorflow.keras.preprocessing.image import ImageDataGenerator  # herramienta para augmentación y preprocesamiento de imágenes
 from tensorflow.keras.callbacks import TensorBoard, EarlyStopping, ModelCheckpoint, ReduceLROnPlateau  # callbacks para visualización y detención temprana
 from tensorflow.keras.optimizers import Adam  # optimizador Adam para entrenar
 from sklearn.metrics import confusion_matrix
 import pandas as pd
-
 
 # PROJECT_ROOT: carpeta donde del script
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -45,7 +45,6 @@ DATASET_DIR: Path = None
 LOGS_DIR: Path = None
 train_gen = None # Necesario globalmente para inferir_test
 model = None # Necesario globalmente para inferir_test
-
 
 # --- DEFINICIONES GLOBALES DE RUTAS Y CONSTANTES ---
 
@@ -61,7 +60,7 @@ NIVEL_DE_MADUREZ = [
 # generadores de entrenamiento y validación (estructura esperada: train/<clase>/*.jpg)
 def crear_generadores(
     data_dir_param=None, # Se resolverá a DATASET_DIR / 'train' si es None
-    img_size=(250, 250),
+    img_size=(200, 200),
     batch_size=16,
     val_split=0.2
 ):
@@ -84,7 +83,7 @@ def crear_generadores(
     try:
         train_generator = datagen.flow_from_directory(
             actual_data_dir,
-            target_size=img_size,       # fuerza a las imágenes en 100×100 px
+            target_size=img_size,       # fuerza a las imágenes en 200×200 px (será vectorizado para MLP)
             batch_size=batch_size,      # lotes de 16 muestras
             classes=NIVEL_DE_MADUREZ,   # orden de etiquetas fijo
             class_mode='categorical',   # salida one-hot multiclase
@@ -108,41 +107,30 @@ def crear_generadores(
         print_color(f"Ocurrió un error inesperado al crear generadores: {e}", color="rojo")
         return None, None
 
+# --- DEFINICIÓN DEL MODELO MLP ---  <-- CAMBIO MLP
+def crear_modelo(input_shape=(200,200,3), n_classes=len(NIVEL_DE_MADUREZ)):
+    # La idea es aplanar la imagen y pasarla por varias densas
+    inp = Input(shape=input_shape)                         # definir tensor de entrada
+    x = Flatten()(inp)                                     # aplanar la imagen a un vector (200*200*3,)
+    x = Dense(256, activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)  # primera capa densa
+    x = Dropout(0.3)(x)                                  
+    x = Dense(128, activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)  # segunda capa densa
+    x = Dropout(0.2)(x)                                    
+    x = Dense(64, activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)  # tercera capa densa
+    x = Dropout(0.2)(x)                                  
+    out = Dense(n_classes, activation='softmax')(x)        # capa de salida con softmax para clasificar
+    model_mlp = Model(inputs=inp, outputs=out)             # crear modelo funcional
 
-# --- DEFINICIÓN DEL MODELO CNN ---
-# bloque CNN reutilizable: dos convoluciones + pooling
-def conv_block(x, filters):
-
-    x = Conv2D(filters, (3,3), activation='relu', padding='same', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)  # primera convolución 3x3
-    x = BatchNormalization()(x) # Añadir BatchNormalization
-    x = Conv2D(filters, (3,3), activation='relu', padding='same', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)  # segunda convolución 3x3
-    x = BatchNormalization()(x) # Añadir BatchNormalization
-    return MaxPooling2D((2,2))(x)  # reducir dimensiones espaciales a la mitad
-
-# 4) Función para crear y compilar el modelo CNN completo
-def crear_modelo(input_shape=(250,250,3), n_classes=len(NIVEL_DE_MADUREZ)):
-    inp = Input(shape=input_shape)                                                                  # definir tensor de entrada
-    x = conv_block(inp, 128)
-    x = conv_block(x, 64)
-    x = conv_block(x, 32)
-    x = Flatten()(x)                                                                               # aplanar salida para capa densa
-    x = Dense(128, activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)       # capa densa intermedia con activación ReLU
-    x = BatchNormalization()(x)                                                                    # añadir BatchNormalization
-    x = Dropout(0.4)(x)                                                                            # aplicar dropout 40% para evitar overfitting (aumentado de 0.2)
-    out = Dense(n_classes, activation='softmax')(x)                                                # capa de salida con softmax para clasificar
-    model_cnn = Model(inputs=inp, outputs=out)                                                     # crear modelo funcional
-
-    model_cnn.compile(
+    model_mlp.compile(
         optimizer=Adam(1e-4),                             # Adam con lr=0.0001
         loss='categorical_crossentropy',                  # entropía cruzada para multiclase
         metrics=['accuracy']                              # precisión como métrica principal
     )
 
-    return model_cnn  # devolver modelo compilado
+    return model_mlp  # devolver modelo compilado
 
 # --- FUNCIÓN DE INFERENCIA EN EL CONJUNTO DE TEST ---
-# 5) Función para inferir sobre los ejemplares en carpeta de test
-def inferir_test(test_dir_param=None, img_size=(250,250), fruit_type_arg="N/A"):
+def inferir_test(test_dir_param=None, img_size=(200,200), fruit_type_arg="N/A"):
     actual_test_dir = test_dir_param if test_dir_param else DATASET_DIR / 'test'
     if not actual_test_dir.is_dir():
         print_color(f"[ERROR] Directorio de test no encontrado para {fruit_type_arg}: {actual_test_dir}", color="rojo")
@@ -176,10 +164,6 @@ def inferir_test(test_dir_param=None, img_size=(250,250), fruit_type_arg="N/A"):
         etiqueta_real_clase_original = clase_dir.name
         clase_para_stats = 'Desconocida'
         
-        for img_file_path in clase_dir.iterdir():
-            if not (img_file_path.is_file() and img_file_path.suffix.lower() in ('.png','.jpg','.jpeg')):
-                continue
-
         if etiqueta_real_clase_original in NIVEL_DE_MADUREZ:
             clase_para_stats = etiqueta_real_clase_original
         else:
@@ -347,11 +331,10 @@ def inferir_test(test_dir_param=None, img_size=(250,250), fruit_type_arg="N/A"):
     print(f"\n=== Fin de la Matriz de Confusión ===\n")
 
 # --- FUNCIÓN PRINCIPAL (MAIN) ---
-# 6) Función principal: entrenar red y luego inferir en test
 def main():
     global DATASET_DIR, LOGS_DIR, train_gen, model  # declarar variables globales usadas en inferencia
 
-    parser = argparse.ArgumentParser(description='Entrenar y evaluar una CNN para clasificación de madurez de frutas.')
+    parser = argparse.ArgumentParser(description='Entrenar y evaluar una CNN (ahora MLP) para clasificación de madurez de frutas.')
     parser.add_argument('--fruit_type', type=str, default='bananas', choices=['bananas', 'tomates'],
                         help='Tipo de fruta para entrenar/evaluar (ej: bananas, tomates). Default: bananas')
     parser.add_argument('--use_best_model', action='store_true',
@@ -375,8 +358,8 @@ def main():
         return
 
     # === CREACIÓN O CARGA DEL MODELO ===
-    model = crear_modelo()                                    # construir y compilar modelo
-    model.summary()                                           # mostrar arquitectura
+    model = crear_modelo()  # CAMBIO MLP: ahora crea un modelo MLP en lugar de CNN
+    model.summary()  # mostrar arquitectura
     
     BEST_MODEL_PATH = None
     load_model_attempted = False
@@ -405,7 +388,7 @@ def main():
     
     if not load_model_attempted or not BEST_MODEL_PATH:
         if not args.use_best_model: # Si no se pidió usar el mejor modelo, o si falló la carga
-             print_color(f"Entrenando nuevo modelo para '{fruit_type_arg}'...", color="magenta")
+             print_color(f"Entrenando nuevo modelo (MLP) para '{fruit_type_arg}'...", color="magenta")
         
         # === BLOQUE DE ENTRENAMIENTO DEL MODELO ===
 
@@ -426,12 +409,12 @@ def main():
         run_log_dir.mkdir(parents=True, exist_ok=True)
 
         # callbacks solo si vamos a entrenar
-        tb_cb = TensorBoard(log_dir=run_log_dir, histogram_freq=1)
+        tb_cb = TensorBoard(log_dir=run_log_dir, histogram_freq=0) # no se considera necesario el callback a tensorboard
         es_cb = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True, verbose=1)
         best_model_filepath = run_log_dir / 'best_model.keras'
         mc_cb = ModelCheckpoint(filepath=best_model_filepath, monitor='val_loss', save_best_only=True, verbose=1)
         lr_cb = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, min_lr=1e-6, verbose=1)
-        callbacks_list = [tb_cb, es_cb, mc_cb, lr_cb]
+        callbacks_list = [es_cb, mc_cb, lr_cb]
 
         print_color(f"Iniciando entrenamiento del modelo para {fruit_type_arg}...", color="cyan")
         
@@ -441,7 +424,7 @@ def main():
         history = model.fit(
             train_gen,
             validation_data=val_gen,
-            epochs=50, # Ajustar epochs según sea necesario (aumentado para dar más margen con EarlyStopping)
+            epochs=5, # Ajustar epochs según sea necesario (aumentado para dar más margen con EarlyStopping)
             callbacks=callbacks_list,
             class_weight=class_weights_dict # Aplicar pesos de clase
         )
@@ -481,8 +464,6 @@ def main():
                 val_loss_msg = f"val_loss mejoró de {current_best_val_loss if current_best_val_loss != float('inf') else 'inf'} → {val_loss:.5f} (modelo guardado)"
                 current_best_val_loss = val_loss
             else:
-                # Si no mejoró, no se imprime nada según el formato deseado, o se podría añadir un "no mejoró".
-                # El formato del usuario solo muestra cuando mejora.
                 pass 
             if val_loss_msg: # Solo imprimir si hay mensaje de mejora
                  print(f"     – {val_loss_msg}")
@@ -491,14 +472,9 @@ def main():
         print("\n3. Ruta del modelo guardado")
         final_best_model_path = best_model_filepath # Path que se usó en ModelCheckpoint
         
-        # Chequear si el mejor modelo realmente existe en la ruta esperada
-        # (puede que no si el entrenamiento fue muy corto y val_loss nunca mejoró)
         model_saved_path_to_display = "No se guardó un nuevo modelo (val_loss no mejoró o entrenamiento interrumpido)."
         if best_model_filepath.exists():
-             # Si usamos restore_best_weights=True, el modelo en memoria es el mejor.
-             # La ruta guardada por ModelCheckpoint es la relevante aquí.
             model_saved_path_to_display = str(best_model_filepath.resolve())
-
 
         print(f"   {model_saved_path_to_display}")
 
@@ -510,7 +486,7 @@ def main():
     print_color(f"\nInferencia en test para '{fruit_type_arg}':", color="cyan")
     inferir_test(fruit_type_arg=fruit_type_arg) # Pasar fruit_type_arg
 
-# Helper para imprimir con colores (sin cambios, pero asegurar que funcione en Git Bash)
+# Helper para imprimir con colores (sin cambios)
 def print_color(text, color="default"):
 
     colors = {
@@ -529,4 +505,4 @@ def print_color(text, color="default"):
 
 # --- PUNTO DE ENTRADA DEL SCRIPT ---
 if __name__ == '__main__':
-    main()  
+    main()
