@@ -113,7 +113,10 @@ def crear_generadores(
 # --- DEFINICIÓN DEL MODELO CNN ---
 # bloque CNN reutilizable: dos convoluciones + pooling
 def conv_block(x, filters):
-    x = Conv2D(filters, (5,5), activation='relu', padding='same', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)  # primera convolución 3x3
+
+    x = Conv2D(filters, (3,3), activation='relu', padding='same', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)  # primera convolución 3x3
+    x = BatchNormalization()(x) # Añadir BatchNormalization
+    x = Conv2D(filters, (3,3), activation='relu', padding='same', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)  # segunda convolución 3x3
     x = BatchNormalization()(x) # Añadir BatchNormalization
     return MaxPooling2D((2,2))(x)  # reducir dimensiones espaciales a la mitad
 
@@ -121,6 +124,7 @@ def conv_block(x, filters):
 def crear_modelo(input_shape=(200,200,3), n_classes=len(NIVEL_DE_MADUREZ)):
     inp = Input(shape=input_shape)                                                                  # definir tensor de entrada
     x = conv_block(inp, 32)
+    x = conv_block(x, 64)
     x = Flatten()(x)                                                                               # aplanar salida para capa densa
     x = Dense(64, activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)       # capa densa intermedia con activación ReLU
     x = BatchNormalization()(x)                                                                    # añadir BatchNormalization                                                                          # aplicar dropout 40% para evitar overfitting (aumentado de 0.2)
@@ -128,7 +132,7 @@ def crear_modelo(input_shape=(200,200,3), n_classes=len(NIVEL_DE_MADUREZ)):
     model_cnn = Model(inputs=inp, outputs=out)                                                     # crear modelo funcional
 
     model_cnn.compile(
-        optimizer=Adam(1e-3),                             # Adam con lr=0.0001
+        optimizer=Adam(1e-4),                             # Adam con lr=0.0001
         loss='categorical_crossentropy',                  # entropía cruzada para multiclase
         metrics=['accuracy']                              # precisión como métrica principal
     )
@@ -428,7 +432,7 @@ def main():
         es_cb = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True, verbose=1)
         best_model_filepath = run_log_dir / 'best_model.keras'
         mc_cb = ModelCheckpoint(filepath=best_model_filepath, monitor='val_loss', save_best_only=True, verbose=1)
-        lr_cb = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, min_lr=1e-4, verbose=1)
+        lr_cb = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, min_lr=1e-5, verbose=1)
         callbacks_list = [tb_cb, es_cb, mc_cb, lr_cb]
 
         print_color(f"Iniciando entrenamiento del modelo para {fruit_type_arg}...", color="cyan")
