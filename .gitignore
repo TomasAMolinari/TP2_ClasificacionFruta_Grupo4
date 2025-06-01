@@ -8,3 +8,6 @@ venv/
 
 # Credenciales de Kaggle
 kaggle.json
+
+# Best Models (muy pesados para subir a Github)
+*.keras
