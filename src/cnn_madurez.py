@@ -61,8 +61,8 @@ NIVEL_DE_MADUREZ = [
 # generadores de entrenamiento y validación (estructura esperada: train/<clase>/*.jpg)
 def crear_generadores(
     data_dir_param=None, # Se resolverá a DATASET_DIR / 'train' si es None
-    img_size=(250, 250),
-    batch_size=16,
+    img_size=(200, 200),
+    batch_size=32,
     val_split=0.2
 ):
     actual_data_dir = data_dir_param if data_dir_param else DATASET_DIR / 'train'
@@ -73,11 +73,12 @@ def crear_generadores(
 
     datagen = ImageDataGenerator(
         rescale=1./255,             # escala de píxeles a [0,1], acelerando aprendizaje
-        rotation_range=30,          # rotaciones aleatorias hasta ±30°
-        zoom_range=[0.8, 1.2],      # zoom aleatorio entre 80% y 120%
-        width_shift_range=0.15,     # desplazamientos horizontales hasta 15%
-        height_shift_range=0.15,    # desplazamientos verticales hasta 15%
+        rotation_range=60,          # rotaciones aleatorias hasta ±60°
+        zoom_range=[0.5, 1.5],      # zoom aleatorio entre 50% y 150%
+        width_shift_range=0.3,     # desplazamientos horizontales hasta 30%
+        height_shift_range=0.3,    # desplazamientos verticales hasta 30%
         horizontal_flip=True,       # inversión horizontal aleatoria
+        vertical_flip=True,         # inversión vertical aleatoria
         validation_split=val_split  # % de datos para validación
     )
 
@@ -112,28 +113,22 @@ def crear_generadores(
 # --- DEFINICIÓN DEL MODELO CNN ---
 # bloque CNN reutilizable: dos convoluciones + pooling
 def conv_block(x, filters):
-
-    x = Conv2D(filters, (3,3), activation='relu', padding='same', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)  # primera convolución 3x3
-    x = BatchNormalization()(x) # Añadir BatchNormalization
-    x = Conv2D(filters, (3,3), activation='relu', padding='same', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)  # segunda convolución 3x3
+    x = Conv2D(filters, (5,5), activation='relu', padding='same', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)  # primera convolución 3x3
     x = BatchNormalization()(x) # Añadir BatchNormalization
     return MaxPooling2D((2,2))(x)  # reducir dimensiones espaciales a la mitad
 
 # 4) Función para crear y compilar el modelo CNN completo
-def crear_modelo(input_shape=(250,250,3), n_classes=len(NIVEL_DE_MADUREZ)):
+def crear_modelo(input_shape=(200,200,3), n_classes=len(NIVEL_DE_MADUREZ)):
     inp = Input(shape=input_shape)                                                                  # definir tensor de entrada
-    x = conv_block(inp, 128)
-    x = conv_block(x, 64)
-    x = conv_block(x, 32)
+    x = conv_block(inp, 32)
     x = Flatten()(x)                                                                               # aplanar salida para capa densa
-    x = Dense(128, activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)       # capa densa intermedia con activación ReLU
-    x = BatchNormalization()(x)                                                                    # añadir BatchNormalization
-    x = Dropout(0.4)(x)                                                                            # aplicar dropout 40% para evitar overfitting (aumentado de 0.2)
+    x = Dense(64, activation='relu', kernel_regularizer=tf.keras.regularizers.l2(0.001))(x)       # capa densa intermedia con activación ReLU
+    x = BatchNormalization()(x)                                                                    # añadir BatchNormalization                                                                          # aplicar dropout 40% para evitar overfitting (aumentado de 0.2)
     out = Dense(n_classes, activation='softmax')(x)                                                # capa de salida con softmax para clasificar
     model_cnn = Model(inputs=inp, outputs=out)                                                     # crear modelo funcional
 
     model_cnn.compile(
-        optimizer=Adam(1e-4),                             # Adam con lr=0.0001
+        optimizer=Adam(1e-3),                             # Adam con lr=0.0001
         loss='categorical_crossentropy',                  # entropía cruzada para multiclase
         metrics=['accuracy']                              # precisión como métrica principal
     )
@@ -142,7 +137,7 @@ def crear_modelo(input_shape=(250,250,3), n_classes=len(NIVEL_DE_MADUREZ)):
 
 # --- FUNCIÓN DE INFERENCIA EN EL CONJUNTO DE TEST ---
 # 5) Función para inferir sobre los ejemplares en carpeta de test
-def inferir_test(test_dir_param=None, img_size=(250,250), fruit_type_arg="N/A"):
+def inferir_test(test_dir_param=None, img_size=(200,200), fruit_type_arg="N/A"):
     actual_test_dir = test_dir_param if test_dir_param else DATASET_DIR / 'test'
     if not actual_test_dir.is_dir():
         print_color(f"[ERROR] Directorio de test no encontrado para {fruit_type_arg}: {actual_test_dir}", color="rojo")
@@ -417,9 +412,12 @@ def main():
             classes=np.unique(classes), 
             y=classes
         )
-        class_weights_dict = dict(enumerate(class_weights_calculated))
-        
-        print_color(f"Pesos de clase calculados para '{fruit_type_arg}': {class_weights_dict}", color="cyan")
+        class_weights_dict = {}
+        for nombre, peso_np in zip(NIVEL_DE_MADUREZ, class_weights_calculated):
+            class_weights_dict[nombre] = float(peso_np)
+
+        # Ahora imprimís el dict y vas a ver {'inmaduro': 0.77, 'maduro': 1.34, ...}
+        print_color(f"Pesos de clase calculados para '{fruit_type_arg}': {class_weights_dict}", "cyan")
 
         current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         run_log_dir  = LOGS_DIR / current_time # Usar LOGS_DIR específico de la fruta
@@ -430,7 +428,7 @@ def main():
         es_cb = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True, verbose=1)
         best_model_filepath = run_log_dir / 'best_model.keras'
         mc_cb = ModelCheckpoint(filepath=best_model_filepath, monitor='val_loss', save_best_only=True, verbose=1)
-        lr_cb = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, min_lr=1e-6, verbose=1)
+        lr_cb = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, min_lr=1e-4, verbose=1)
         callbacks_list = [tb_cb, es_cb, mc_cb, lr_cb]
 
         print_color(f"Iniciando entrenamiento del modelo para {fruit_type_arg}...", color="cyan")
@@ -441,7 +439,7 @@ def main():
         history = model.fit(
             train_gen,
             validation_data=val_gen,
-            epochs=50, # Ajustar epochs según sea necesario (aumentado para dar más margen con EarlyStopping)
+            epochs=10, # Ajustar epochs según sea necesario (aumentado para dar más margen con EarlyStopping)
             callbacks=callbacks_list,
             class_weight=class_weights_dict # Aplicar pesos de clase
         )
